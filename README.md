@@ -4,7 +4,24 @@
 
 ## High-level architecture
 
-`spm` is split into two binaries:
+`spm` accepts commands for executing a certain use case. The specification of
+of each command is described in the following sections.
+
+### Commands
+
+#### `update`
+
+#### `upgrade`
+
+#### `install`
+
+#### `remove`
+
+#### `list`
+
+#### `create`
+
+### Package Index
 
 - `spm` is the package manager client itself. It searches for packages, displays
   package infos, installs or removes packages, updates the package index and
