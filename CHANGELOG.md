@@ -139,6 +139,13 @@ once it has something to version.
 
 ### Changed
 
+- Work on a module now starts by branching `feat/<module>-<title>` —
+  `feat/M1-the-model` for the next one — with every step in that module
+  committed there and the branch
+  merging to `main` when the module earns its ✅. Recorded in both the
+  development guidelines and the implementation plan, since one is where the
+  rule lives and the other is where somebody is standing when it applies.
+
 - The specification the README used to carry has moved to
   `docs/dev/ARCHITECTURE.md`, and the README now carries what surrounds it
   instead: what `spm` is for — a card that can be added to for as long as it is

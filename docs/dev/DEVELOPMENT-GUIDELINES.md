@@ -227,6 +227,28 @@ Three things that will cost an afternoon each if they are forgotten:
   page size, or path conventions. If a test only passes on the machine that
   built it, it is testing the machine.
 
+## Branches
+
+**Work on a module starts by creating a branch for it**, named after the module
+in [the implementation plan](IMPLEMENTATION-PLAN.md):
+
+```sh
+git switch -c feat/M1-the-model        # M1 - The model
+```
+
+Every step in that module is committed on that branch, and the branch merges
+back to `main` when the module is finished — which is also when the module gets
+its ✅ in the plan. So a branch is one module's worth of work, and `main` moves
+a module at a time rather than a step at a time.
+
+Naming is `feat/<module>-<title>`, where `<module>` is the identifier the plan
+uses and `<title>` is the title of the module, with spaces replaced by `-` and
+all characters lowercase. The plan is the index of what a branch is for, and a
+name that has to be translated to find it is worth nothing.
+
+CI runs on every branch, so a module's branch is checked from its first commit
+rather than at the point it is merged.
+
 ## Changes and the changelog
 
 Every change to this repository gets an entry in [CHANGELOG.md](../../CHANGELOG.md),

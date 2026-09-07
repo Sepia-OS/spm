@@ -25,6 +25,12 @@ and a milestone gets one when every step under it has. This document is
 therefore the status as well as the plan, so there is no second place to keep
 in step with it.
 
+**A module is a branch.** Starting one begins with
+`git switch -c feat/<module>-<title>` — `feat/M1-the-model` for the milestone
+below — and every step in it is committed there.
+The branch merges to `main` when the module is finished, which is when it earns
+its ✅. See [the development guidelines](DEVELOPMENT-GUIDELINES.md).
+
 ---
 
 ## M0 — Groundwork ✅
