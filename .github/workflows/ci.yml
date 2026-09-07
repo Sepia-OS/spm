@@ -1,0 +1,105 @@
+name: CI
+
+# Every commit on every branch, and every pull request against main. The
+# README promises a build on every push no matter the branch, so this is not
+# narrowed to a branch list.
+on:
+  push:
+    branches: ['**']
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+# A newer push to the same branch makes an older run pointless, so it is
+# cancelled rather than left to finish.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  # A backtrace costs nothing here and is the difference between a useful
+  # failed run and one that has to be reproduced locally.
+  RUST_BACKTRACE: 1
+
+jobs:
+  check:
+    name: build and test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      # Recorded rather than assumed: the toolchain a run used is the first
+      # thing wanted when a build passes here and fails on a workstation.
+      - name: Which toolchain
+        run: |
+          rustc --version
+          cargo --version
+          cargo fmt --version
+          cargo clippy --version
+
+      # ~/.cargo holds the registry and the compiled dependencies of the
+      # toolchain; target/ holds this crate's. Keyed on the lockfile, so a
+      # dependency change gets a cold cache and nothing else does.
+      - name: Cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: cargo-${{ runner.os }}-${{ hashFiles('Cargo.lock') }}
+          restore-keys: cargo-${{ runner.os }}-
+
+      # docs/dev/DEVELOPMENT-GUIDELINES.md requires the Apache header on every
+      # source file, and neither rustfmt nor clippy knows about it - so nothing
+      # would ever say it was missing if this step did not.
+      - name: Every source file has its licence header
+        run: |
+          files=$(find src tests -name '*.rs' 2>/dev/null || true)
+          if [ -z "$files" ]; then
+            echo "no source files found - has the layout moved?" >&2
+            exit 1
+          fi
+          missing=$(echo "$files" | xargs grep -L 'Licensed under the Apache License' || true)
+          if [ -n "$missing" ]; then
+            echo "::error::these files have no licence header:"
+            echo "$missing"
+            exit 1
+          fi
+          echo "$(echo "$files" | wc -l | tr -d ' ') files, all with a header"
+
+      - name: Formatting
+        run: cargo fmt --check
+
+      # --all-targets so the tests are linted too. Without it the lints stop at
+      # the library, and the tests are where sloppiness accumulates.
+      - name: Lints
+        run: cargo clippy --all-targets --locked -- -D warnings
+
+      # --locked everywhere: it fails if Cargo.lock is missing or out of date,
+      # which is the whole point of committing the lockfile. A CI run that
+      # quietly resolved different versions would not be testing this commit.
+      - name: Build
+        run: cargo build --all-targets --locked
+
+      # Plain `cargo test` rather than `--all-targets`, because --all-targets
+      # silently skips the doc-tests.
+      - name: Test
+        run: cargo test --locked
+
+      # `cargo test` prints one summary per test binary, so the last line of its
+      # output is the last binary's count and not the total - which reads as
+      # "0 tests" on a green run. Counting the listed names is the honest number.
+      - name: How many tests ran
+        if: always()
+        run: |
+          total=$(cargo test --locked -- --list | grep -c ': test$')
+          echo "$total tests"
+          if [ "$total" -eq 0 ]; then
+            echo "::error::no tests were collected"
+            exit 1
+          fi

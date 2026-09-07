@@ -1,0 +1,445 @@
+# `spm` Design
+
+[ARCHITECTURE.md](ARCHITECTURE.md) says what `spm` does: the commands, the
+package format, what a source is. This document says how it is built — the
+module layout, the on-disk formats, the algorithms, the dependencies and the
+reasoning behind each. Where the two disagree, the architecture wins and this
+document is wrong.
+
+## Constraints
+
+Five facts about the machine this runs on decide most of what follows. None of
+them is a preference.
+
+- **The device is a Raspberry Pi running musl.** The target is
+  `aarch64-unknown-linux-musl`. The smallest supported board, the Zero 2 W, has
+  512 MiB of RAM, and a package can be 200 MiB unpacked — the Helix package is
+  216 MiB, most of it tree-sitter grammars. Nothing may be held in memory that
+  is proportional to a package's size.
+- **There is no trust store on the card.** SepiaOS ships no `/etc/ssl`, no CA
+  bundle, no `ca-certificates`. Anything verifying a TLS certificate has to
+  carry its own roots.
+- **There is no clock until the network is up.** A Pi has no battery-backed
+  clock, so it boots in 1970 until `sepia-time` sets it. Every certificate on
+  earth is "not valid before" a date after that, so TLS fails outright until
+  then — this is what stopped `grit` cloning over HTTPS before `sepia-time`
+  existed.
+- **`spm` runs as root and writes into `/`.** A bug here does not corrupt a
+  document, it corrupts the operating system the device boots from.
+- **It has to work on a card built with `WITH_LLVM=0`.** The LLVM package is
+  what supplies `libgcc_s.so.1` and `libstdc++.so.6`; a dynamically linked
+  `spm` would inherit that dependency and stop working on a minimal card. So
+  `spm` is **statically linked**, like `grit` and unlike everything else on the
+  card. It needs no `dlopen`, so nothing is lost by it.
+
+## Layout
+
+One binary, `spm`, with `create` as a subcommand of it. The architecture
+describes `create` as one of `spm`'s commands, and a second binary would
+duplicate the metadata types, the archive writer and the hashing for the sake
+of a separation nobody asked for.
+
+It is also a **library with a thin binary on top of it**, rather than a binary
+alone. An integration test in `tests/` cannot reach inside a binary crate, and
+the testing section below asks for tests that drive whole commands, so
+everything lives in the library and `main.rs` is the mapping from a result to
+an exit code.
+
+```
+src/
+  lib.rs            the crate: every module below is public from here
+  main.rs           argument parsing, dispatch, exit codes
+  cli.rs            the clap definitions - one struct per command
+  error.rs          Error, and the exit code each variant maps to
+  model/
+    version.rs      Version and its ordering
+    metadata.rs     Metadata: what is in a package's metadata.json
+    index.rs        Index: what a source publishes
+    installed.rs    Record: what is installed, its files, and why
+    name.rs         PackageName and SourceName, and <source>/<package>
+  store/
+    config.rs       /etc/spm/sources.json
+    db.rs           /var/lib/spm/installed/
+    cache.rs        /var/cache/spm/
+    atomic.rs       write-then-rename, and the install journal
+    lock.rs         the single-writer lock
+  net/
+    transport.rs    trait Transport - the seam the tests replace
+    https.rs        the real one: ureq + rustls + compiled-in roots
+    download.rs     stream to disk, hashing as it goes
+  ops/
+    resolve.rs      names to candidates; dependency resolution
+    update.rs       fetch and replace indexes
+    install.rs      plan, verify, unpack, record
+    remove.rs       reverse-record, autoremove
+    upgrade.rs      compute the set, then reuse install
+    create.rs       pack a staged tree into a package
+    query.rs        search, info, list, list-sources, source-info
+    source.rs       add-source, remove-source - the ones that write
+  unpack.rs         tar extraction with the safety rules
+  ui.rs             output formatting - one place, so it is consistent
+```
+
+`ops/` is where policy lives; `store/` and `net/` know nothing about commands.
+A command is a function from parsed arguments to a `Result`, so the tests call
+the same entry point the CLI does.
+
+## On-disk formats
+
+All three are JSON, because one serialiser is enough and a person may have to
+read them on a device with only `vi`.
+
+### `/etc/spm/sources.json`
+
+```json
+{
+  "sources": [
+    { "name": "sepia", "url": "https://…/index.json", "default": true }
+  ]
+}
+```
+
+`name` is unique — that is what makes `<source>/<package>` unambiguous — and at
+most one entry has `default: true`.
+
+### `/var/lib/spm/index/<source>.json`
+
+What a source publishes, stored verbatim as fetched, plus nothing. Storing it
+unmodified means a fetch is a download and a write, with no transformation step
+that could differ between versions of `spm`.
+
+```json
+{
+  "name": "sepia",
+  "updated": 1757260800,
+  "packages": [
+    {
+      "name": "helix",
+      "description": "The Helix editor, with its tree-sitter grammars.",
+      "versions": [
+        {
+          "version": "25.07.1",
+          "target": "aarch64-musl",
+          "url": "https://…/helix-25.07.1-aarch64-musl.tar.gz",
+          "sha256": "…",
+          "payload_sha256": "…",
+          "dependencies": [ { "name": "llvm-runtime", "version": "23.1.0" } ]
+        }
+      ]
+    }
+  ]
+}
+```
+
+`sha256` is of the package as published; `payload_sha256` is the digest
+`metadata.json` carries for `data.tar.gz`. The architecture explains why both
+exist; the client checks them at different moments and must not confuse them,
+so they are not called the same thing.
+
+### `/var/lib/spm/installed/<name>.json`
+
+```json
+{
+  "metadata": { "…the package's own metadata.json, verbatim…" },
+  "source": "sepia",
+  "reason": "explicit",
+  "installed_at": 1757260800,
+  "files": [ "usr/bin/hx", "usr/lib/helix/runtime/grammars/rust.so" ]
+}
+```
+
+`reason` is `explicit` or `dependency`, and it is the whole basis of
+`remove`'s autoremove. `files` are relative to `/`, in the order they were
+written, so undoing an install is walking the list backwards. Directories are
+not listed: they are removed when they empty out.
+
+## Versions
+
+Package versions are upstream versions — `25.07.1`, `1.2.6`, `23.1.0` — and
+upstream versions are not semver. `25.07.1` has a leading zero that semver
+forbids, and the helix repository publishes tag `25.07.1` for what its own
+crate calls `25.7.1`.
+
+So `Version` is a list of dot-separated components, compared left to right:
+
+- Two numeric components compare numerically, so `25.07.1` and `25.7.1` are
+  equal and `1.10.0` is above `1.9.0`.
+- A numeric component sorts above a non-numeric one, so `1.0` is above
+  `1.0-rc1`.
+- Two non-numeric components compare as strings.
+- A missing component counts as zero, so `1.2` and `1.2.0` are equal.
+
+This is deliberately not semver and does not pretend to understand what a major
+version means. It is an ordering, which is all `dependencies` ("that version or
+a newer one") and `upgrade` ("is there a higher one") need.
+
+## Flows
+
+### `update`
+
+For each selected source: fetch the index into a temporary file in the same
+directory as its destination, parse it completely, then `rename` it into place.
+`rename` within a directory is atomic, so a reader either sees the whole old
+index or the whole new one. A parse failure discards the temporary file and
+leaves the previous index untouched.
+
+Sources are fetched one after another, not in parallel. A device on a phone
+tether is the normal case, and four concurrent fetches on a Zero 2 W buy
+nothing worth the complexity.
+
+Failures are collected rather than thrown: every source is attempted, each
+failure is reported with the source's name, and the process exits non-zero if
+any failed.
+
+### `install`
+
+1. **Resolve the name.** Unqualified and offered by one source: that one.
+   Unqualified and offered by several: refuse, listing them as
+   `<source>/<package>`. Qualified: that source, or an error naming what is
+   configured.
+2. **Select the version** — the one asked for, else the highest whose `target`
+   matches the device's.
+3. **Resolve dependencies** breadth-first, gathering the transitive set. For
+   each dependency take the lowest version that satisfies "that version or a
+   newer one" and is not older than what is already installed. A dependency
+   already installed at a satisfying version is not reinstalled. A cycle is
+   detected by the visited set and reported rather than followed.
+4. **Plan and show.** The set, what is new, what is an upgrade, the total
+   download. `--dry-run` stops here.
+5. **Download** each package to `/var/cache/spm/`, hashing the stream as it is
+   written, and compare with the index's `sha256` **before the archive is
+   opened**. A mismatch is refused there.
+6. **Open** the outer archive, read `metadata.json`, hash `data.tar.gz` and
+   compare with its `sha256`. Refuse on mismatch.
+7. **Dry-run the extraction**: read the payload's entries and build the file
+   list without writing anything, and check every path against the rules in
+   *Unpacking*, and against ownership — a path claimed by another package's
+   record, or already present on disk and claimed by none, stops the install
+   before a single file is written.
+8. **Commit.** Write `installed/<name>.json.partial` with the full file list,
+   then extract, then rename the record to `.json`. The record exists before
+   the files do, so an interrupted install is recoverable in exactly one
+   direction.
+9. **Recover, if needed.** Any `.partial` found at startup is an install that
+   did not finish: its files are removed and the record deleted, before
+   anything else runs. There is no half-installed state that survives the next
+   invocation.
+
+### `remove`
+
+The reverse, and simpler because the record already says what to do. Refuse if
+another record depends on this package. Delete the files in the record's list
+in reverse order, skipping any path another record also claims, and remove
+directories that have become empty. Then the autoremove pass: repeatedly drop
+any `dependency` record that no remaining record depends on, until a pass
+changes nothing.
+
+### `upgrade`
+
+Compute per package: the installed version, and the highest in the index for
+this target. For each candidate, resolve its dependencies as `install` would.
+A package whose dependencies cannot be satisfied is dropped from the set and
+reported — not fatal, because the point is to upgrade what can be upgraded.
+Then hand the surviving set to `install`'s steps 4 onward.
+
+### `create`
+
+Read the metadata, check the tree against the four refusals, write
+`data.tar.gz` while hashing it, fill the digest into the metadata, write the
+outer archive containing `data.tar.gz` and `metadata.json`, then write
+`metadata.json` and `SHA256SUMS` beside it. Because the digest is only known
+after the payload is written, the payload is written first and to a temporary
+file — the metadata that goes *into* the archive is not the metadata the author
+supplied.
+
+## Unpacking
+
+Extraction is the one place where a hostile or careless package can do real
+damage, so it is a single function with its own tests, and every entry is
+checked before it is created:
+
+- **The path must be relative and must stay inside the root.** No leading `/`,
+  no component equal to `..` — after normalisation, an entry that escapes is a
+  refusal, not a clamp.
+- **The path must start with `usr/`.** `create` enforces this when packing;
+  `install` enforces it again when unpacking, because a package can reach a
+  device without having passed through this `create`.
+- **Only regular files, directories and symlinks.** No devices, no FIFOs, no
+  sockets, no hard links — a hard link to `/etc/shadow` is a way to hand out
+  its contents.
+- **A symlink's target is checked the same way as a path**, so a package cannot
+  drop a link pointing at `/etc` and then write "through" it in a later entry.
+- **Permissions come from the archive, ownership does not.** Everything is
+  written `root:root`. The uid a package was built under is an accident of the
+  build machine, and this is the mistake that broke helix's CI: GNU tar as root
+  restored `runner:docker` from the archive and git then refused the tree.
+- **Nothing is followed.** Files are created with `O_NOFOLLOW` semantics so an
+  existing symlink at the destination cannot redirect a write.
+
+## Networking
+
+`ureq` with `rustls`, and **`webpki-roots` compiled into the binary**, because
+the card has no trust store to read. A blocking HTTP client with no async
+runtime suits a CLI that makes a handful of sequential requests; `reqwest`
+would pull `tokio` in for nothing.
+
+- **HTTPS only.** A plain-`http` URL is refused, not upgraded. This mirrors
+  what every SepiaOS Makefile already does when resolving a release.
+- **Downloads stream to disk** through a hasher, never into memory. A 200 MiB
+  package on a 512 MiB board leaves no other option, and it means the digest
+  costs nothing extra.
+- **Retries** on connection failure and 5xx, three times with a growing delay;
+  never on a 4xx, which will not improve.
+- **Interrupted downloads are discarded**, not resumed. Resume needs range
+  support and a way to know the partial file belongs to the same object; the
+  checksum is what tells us we got it right, and a fresh start always passes
+  that test.
+- **The clock.** A TLS failure that says the certificate is not yet valid is
+  almost always a device whose clock has not been set. The error names that
+  possibility and points at `sepia-time`, rather than reporting a certificate
+  error the user cannot act on.
+- **`GITHUB_TOKEN` is used if it is set**, for the same reason the sibling
+  Makefiles do: the anonymous GitHub API allowance is small, and a device
+  behind a shared address can exhaust it.
+
+## Locking and concurrency
+
+One lock file, `/var/lib/spm/lock`, taken with `flock(LOCK_EX)` by every
+command that writes and never by one that only reads. A second `spm` blocks
+with a message saying what holds it. `flock` is released by the kernel when the
+process dies, so a killed `spm` does not need a stale-lock story.
+
+Within a command there is no concurrency at all. The work is dominated by one
+download and one extraction, both sequential by nature.
+
+## Errors and exit codes
+
+`error.rs` defines one enum; every variant carries what the user needs to act
+and maps to an exit code, so scripts can branch without parsing text:
+
+| code | meaning |
+|---|---|
+| 0 | success |
+| 1 | a general failure |
+| 2 | wrong usage — bad arguments, mutually exclusive options |
+| 3 | not found — no such package, source, or version |
+| 4 | ambiguous — a name offered by several sources |
+| 5 | a network or TLS failure |
+| 6 | a checksum or verification failure |
+| 7 | a conflict — a file owned by another package, or a dependent that blocks a removal |
+| 8 | incomplete — `update` reached some sources but not all |
+
+Verification failure has a code of its own because it is the one failure that
+may mean something other than bad luck.
+
+## Dependencies
+
+Kept short, and every one of them chosen against the constraint that this
+cross-compiles statically to `aarch64-unknown-linux-musl` from a Linux CI
+container and a macOS workstation:
+
+| crate | for | why this one |
+|---|---|---|
+| `clap` (derive) | arguments | The subcommands and their options are a datatype; hand-rolling this is where CLI bugs live. |
+| `serde`, `serde_json` | the three formats | One serialiser for all of them. |
+| `ureq` | HTTP | Blocking, small, `rustls` without an async runtime. |
+| `rustls` + `webpki-roots` | TLS | Roots compiled in — the card has no trust store. No OpenSSL to cross-compile. |
+| `sha2` | checksums | Pure Rust; no `libcrypto` on the target. |
+| `flate2` (`rust_backend`) | gzip | The Rust backend avoids linking `zlib`; a C dependency is the usual reason a musl cross-build stops working. |
+| `tar` | archives | Reading and writing, streaming both ways. |
+| `libc` | `flock` | One call. A crate for it would be a dependency for one call. |
+| `tempfile` | staging | Temporary files in the destination directory, cleaned up on drop. |
+| `thiserror` | errors | The enum above, without the boilerplate. |
+
+`Cargo.lock` is committed. `spm` is a binary, its builds have to be
+reproducible, and the `.gitignore` this repository started from ignores the
+lockfile — a template default that is wrong for an executable and needs
+removing.
+
+## Testing
+
+- **Unit tests** for the parts with real logic and no I/O: version ordering
+  (including `25.07.1` against `25.7.1`), name resolution, dependency
+  resolution over a fixture index, autoremove, and every rejection in
+  *Unpacking* against a hand-built malicious tar.
+- **`trait Transport` is the seam.** Integration tests inject a transport that
+  serves a fixture index and fixture packages out of a temporary directory, so
+  the whole of `update`, `install`, `remove` and `upgrade` runs end to end
+  against a real filesystem with no network and no HTTPS.
+- **Root-relative operations are tested against a temporary root.** Every path
+  in `store/` and `unpack.rs` is built from a configurable prefix, defaulting
+  to `/`, so a test installs into a directory and inspects the result. That
+  prefix is not a user-facing option, but it is what makes the tests possible.
+- **The cross-built binary is executed, not only built.** The CI runner is
+  x86_64, so the `aarch64-musl` binary runs under `qemu-user-static` in the
+  same container; on an Apple Silicon workstation it runs at full speed in a
+  `linux/arm64` container. This is how the helix package's runtime behaviour
+  was verified, and it is the only way a test says anything about the machine
+  the program is for.
+
+## Build and release
+
+The two workflows the README describes, on the pattern the sibling repositories
+already use:
+
+- **CI** on every commit and every branch: `cargo fmt --check`, `cargo clippy
+  -D warnings`, `cargo test` on the host, then the cross-build for
+  `aarch64-unknown-linux-musl` and the test suite again under emulation.
+- **Release**, manually dispatched with a version: branch `main` to
+  `rel-<version>`, replace `0.1.0-replace-me` in `Cargo.toml`, build, and
+  publish the binary with a `SHA256SUMS` beside it.
+
+`spm` packages itself with `create` once it can, which is the first real test
+of the format: the package that installs the package manager is a package like
+any other.
+
+## Resource budget
+
+- **Memory**: bounded by the index, which is parsed whole. A few hundred
+  packages with a few versions each is a few hundred kilobytes. Downloads and
+  extraction are streamed, so a 216 MiB package needs no more memory than a
+  1 MiB one.
+- **Disk**: a package is on the card twice during an install — the archive in
+  `/var/cache/spm/` and the unpacked files under `/usr` — so an install needs
+  roughly twice the package's size free. `install` checks before downloading
+  and says so if it will not fit, rather than filling the root filesystem.
+- **Binary size**: a static Rust binary with `clap`, `rustls` and `tar` is a
+  few megabytes. That is the cost of `spm` being the one thing on the card that
+  cannot depend on anything else.
+
+## Security model
+
+What `spm` trusts, and what it does not:
+
+- **Trusted**: the configured sources, and TLS to them. Adding a source is
+  giving it the right to put files on the device.
+- **Not trusted**: the network in between — every download is checked against a
+  digest that came from the index over TLS. The notification path is not
+  trusted at all, and the index reads releases itself rather than believing an
+  event; that is the architecture's rule and this document does not soften it.
+- **Not executed**: a package contains files, and nothing else. There are no
+  maintainer scripts, no hooks, no post-install step, so installing a package
+  cannot run code as root. musl has no `ld.so.cache`, so there is nothing a
+  shared library needs done after it lands — the usual reason a package manager
+  grows a post-install hook does not arise here.
+- **Not privileged by default**: the device runs as root, so this is a
+  statement about blast radius rather than a boundary. It is the reason
+  *Unpacking* is as strict as it is.
+
+## Open questions
+
+- **A source is addressed by URL in `add-source`, `remove-source` and
+  `source-info`, and by name everywhere else.** Accepting either where a source
+  is named would cost little and remove the one inconsistency in the CLI.
+- **`create` refuses anything outside `usr/`, so a package cannot ship a
+  default configuration** in `/etc`. Whether that is a limitation to fix or a
+  rule to keep is not settled.
+- **Nothing signs an index.** The chain of digests protects a download from the
+  network; it does not protect the device from a source that has been taken
+  over. Signing the index, and pinning a key per source in `sources.json`, is
+  the obvious next layer.
+- **Downgrades are not specified.** `install --version` can name an older
+  version than the installed one; whether that is a downgrade, an error, or a
+  no-op is undecided.
+- **There is no `verify` command** to re-check installed files against their
+  records. The data to do it is already there.

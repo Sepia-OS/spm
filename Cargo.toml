@@ -5,3 +5,17 @@ edition = "2024"
 description = "A package manager for the SepiaOS operating system."
 
 [dependencies]
+thiserror = "2.0.20"
+
+# Configured here rather than on the CI command line, so that a build in a
+# worktree enforces exactly what CI does. A lint that only fires in CI is
+# discovered at the worst possible moment.
+[lints.rust]
+unsafe_code = "deny"
+missing_debug_implementations = "warn"
+
+[lints.clippy]
+all = { level = "deny", priority = -1 }
+unwrap_used = "deny"
+expect_used = "deny"
+panic = "deny"

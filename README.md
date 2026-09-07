@@ -2,60 +2,86 @@
 
 `spm` is the SepiaOS package manager.
 
-## High-level architecture
+## What it is for
 
-`spm` accepts commands for executing a certain use case. The specification of
-of each command is described in the following sections.
+SepiaOS is an operating system for the Raspberry Pi. What a card carries is
+decided when the image is built: the editor, the compiler, the filesystem
+tools. Adding something afterwards has meant rebuilding the image and writing
+a new card.
 
-### Commands
+`spm` is how a running device gets software instead — install a package, remove
+one, keep what is there up to date. It is the difference between a card that is
+finished when it is written and one that can be added to for as long as it is
+in use.
 
-#### `update`
+## Status
 
-#### `upgrade`
+**Early.** The specification is written and the implementation has not started.
+The documents below describe the behaviour `spm` is being built to, not
+behaviour it has; [the implementation plan](docs/dev/IMPLEMENTATION-PLAN.md) is
+the honest account of how much exists.
 
-#### `install`
+Nothing in this repository is ready to install on a device yet.
 
-#### `remove`
+## Documentation
 
-#### `list`
+| | |
+|---|---|
+| [User guide](docs/USER-GUIDE.md) | For somebody with a device: installing, upgrading, removing, publishing a package, and what to do when something goes wrong. |
+| [Architecture](docs/dev/ARCHITECTURE.md) | What `spm` does — every command, what a source is, and the package format. |
+| [Design](docs/dev/DESIGN.md) | How it is built — module layout, on-disk formats, algorithms, dependencies, and the constraints behind each. |
+| [Implementation plan](docs/dev/IMPLEMENTATION-PLAN.md) | The order the work happens in, step by step. |
+| [Development guidelines](docs/dev/DEVELOPMENT-GUIDELINES.md) | The house rules for changing this repository. |
 
-#### `create`
+Start with the architecture if you want to know what `spm` is; start with the
+user guide if you want to know what using it will feel like.
 
-### Package Index
+## How it works, briefly
 
-- `spm` is the package manager client itself. It searches for packages, displays
-  package infos, installs or removes packages, updates the package index and
-  updates packages if new versions are available.
-- `spm-creator` creates the package archive that is published. Usually the tool
-  is executed in Release pipeline and the result is then published.
+A **package** is a tree of files with a description of itself — what it is
+called, what version it is, and what else has to be installed for it to work.
 
-The package index as well as the packages are hosted on Github. The package
-index is frequently updated by a recuring action. It scans all package
-repositories to check whether new releases are available. If this is the case,
-the corresponding entry for the package in the index is updated by adding this
-new package version.
+A **source** is a repository that publishes an index of packages, and that
+keeps the index up to date on its own by watching the repositories around it. A
+repository joins a source by being tagged, and publishes a new version by
+cutting a release. Nobody maintains a list.
 
-The package manager client has a local version of the package index. The package
-index is automatically loaded the first time `spm` is started by the user, iff
-and only if there is no local package index. Users can update the package index,
-update all installed packages if new versions are available, get package infos,
-search for packages, install and deleted packages.
+A device can be configured with more than one source, and everything it
+installs is checked against a checksum the index published before a single file
+is written.
 
-In the following sections `spm` and `spm-creator` are described in detail.
+## Part of SepiaOS
 
-## `spm-creator`
+`spm` is one repository of several. Each builds one part of what ends up on a
+card, and each publishes releases the others consume:
 
-## `spm`
+| | |
+|---|---|
+| [boot](https://github.com/Sepia-OS/boot) | The boot partition — firmware, `config.txt`, device trees, the kernel. |
+| [rootfs](https://github.com/Sepia-OS/rootfs) | Assembles the root filesystem and the bootable image from everything else. |
+| [musl](https://github.com/Sepia-OS/musl) | The C library the card runs on. |
+| [llvm](https://github.com/Sepia-OS/llvm) | `clang` and `lld` for the device, and the runtime libraries other packages need. |
+| [make](https://github.com/Sepia-OS/make) | GNU make for the device. |
+| [e2fsprogs](https://github.com/Sepia-OS/e2fsprogs) | The ext filesystem tools. |
+| [wifi](https://github.com/Sepia-OS/wifi) | `wpa_supplicant` and `libnl`. |
+| [rust-toolchain](https://github.com/Sepia-OS/rust-toolchain) | `rustc` and `cargo` for the device. |
+| [grit](https://github.com/Sepia-OS/grit) | Git, as a Rust implementation, and the `git` command. |
+| [helix](https://github.com/Sepia-OS/helix) | The Helix editor and its grammars. |
+| **spm** | This one. |
 
-## Building the binaries for release
+## Contributing
 
-- Two actions are available:
-  - `CI` is started everytime a commit/push happens, no matter which branch
-    it is.
-  - `Release` is manually started by the user. The user must enter the version
-    number and a release branch (`rel-<version>`) is created where the release
-    build is started on. If the release branch is already existing, no new one
-    needs to be created, it just shall be used.
-- Replace the version string in the Cargo.toml (`version = "0.1.0-replace-me"`)
-  with the release version after creating the release branch
-  (e.g. `version = "0.3.2"`) and before building it.
+- **The documents come first.** A change in behaviour is a change to
+  [the architecture](docs/dev/ARCHITECTURE.md) before it is a change to the
+  code, so that what `spm` is meant to do never has to be inferred from what it
+  currently does.
+- **Every change gets a changelog entry**, under `## [Unreleased]` in
+  [CHANGELOG.md](CHANGELOG.md), in the same commit as the change. The format is
+  [Keep a Changelog 1.1.0](https://keepachangelog.com/en/1.1.0/).
+- **Read [the development guidelines](docs/dev/DEVELOPMENT-GUIDELINES.md)**
+  before the first pull request. They are short, and most of what is in them
+  was learned the expensive way somewhere else in SepiaOS.
+
+## Licence
+
+Apache License 2.0. See [LICENSE](LICENSE).
