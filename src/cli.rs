@@ -42,8 +42,52 @@ pub struct Cli {
 /// rest arrive with the steps that implement them.
 #[derive(Debug, Subcommand)]
 pub enum Command {
+    /// List the configured package sources
+    ListSources,
+
+    /// Show what is known about one package source
+    SourceInfo(SourceInfoArgs),
+
+    /// Add a package source
+    AddSource(AddSourceArgs),
+
+    /// Remove a package source, without uninstalling anything
+    RemoveSource(RemoveSourceArgs),
+
     /// Turn a staged tree into an installable package
     Create(CreateArgs),
+}
+
+/// `spm source-info`.
+#[derive(Debug, Args)]
+pub struct SourceInfoArgs {
+    /// The URL of the source, as `spm list-sources` shows it
+    #[arg(value_name = "URL")]
+    pub url: String,
+}
+
+/// `spm add-source`.
+#[derive(Debug, Args)]
+pub struct AddSourceArgs {
+    /// Where the source publishes its index
+    #[arg(value_name = "URL")]
+    pub url: String,
+
+    /// Make this the source used when a command needs one and none is given
+    #[arg(long)]
+    pub default: bool,
+
+    /// Use this name rather than the one the index declares
+    #[arg(long, value_name = "NAME")]
+    pub name: Option<String>,
+}
+
+/// `spm remove-source`.
+#[derive(Debug, Args)]
+pub struct RemoveSourceArgs {
+    /// The URL of the source, as `spm list-sources` shows it
+    #[arg(value_name = "URL")]
+    pub url: String,
 }
 
 /// `spm create`.

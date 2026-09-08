@@ -227,7 +227,7 @@ impl Https {
             if now < self.floor {
                 return Error::ClockBehind {
                     url: url.to_owned(),
-                    reading: date_of(now),
+                    reading: crate::ui::date(now),
                 };
             }
         }
@@ -267,37 +267,16 @@ fn floor_from(path: &Path) -> u64 {
         .unwrap_or(ASSUMED_FLOOR)
 }
 
-/// A date, from seconds since the epoch.
+/// Whether this URL is one a `GITHUB_TOKEN` may be sent to.
 ///
-/// Written out rather than taken from a crate: one date, one format, and the
-/// alternative is a dependency for a dozen lines. This is Howard Hinnant's
-/// civil-from-days, which is exact for every date this will ever see.
-fn date_of(seconds: u64) -> String {
-    let days = i64::try_from(seconds / 86_400).unwrap_or(0);
-    let z = days + 719_468;
-    let era = z.div_euclid(146_097);
-    let day_of_era = z.rem_euclid(146_097);
-    let year_of_era =
-        (day_of_era - day_of_era / 1460 + day_of_era / 36_524 - day_of_era / 146_096) / 365;
-    let year = year_of_era + era * 400;
-    let day_of_year = day_of_era - (365 * year_of_era + year_of_era / 4 - year_of_era / 100);
-    let shifted_month = (5 * day_of_year + 2) / 153;
-    let day = day_of_year - (153 * shifted_month + 2) / 5 + 1;
-    let month = if shifted_month < 10 {
-        shifted_month + 3
-    } else {
-        shifted_month - 9
-    };
-    let year = if month <= 2 { year + 1 } else { year };
-    format!("{year:04}-{month:02}-{day:02}")
-}
-
-/// The token to send with this request, if there is one and it is owed.
+/// **Only GitHub.** A credential goes to the host it was issued for and to no
+/// other: a source is a URL somebody typed, and sending a token to it because
+/// it happens to be in the environment would hand it to whoever runs that
+/// host. The check is on the whole host and not a substring of it, so
+/// `github.com.example.test` is not GitHub.
 ///
-/// **Only to GitHub.** A credential goes to the host it was issued for and to
-/// no other: a source is a URL somebody typed, and sending a token to it
-/// because it happens to be in the environment would hand it to whoever runs
-/// that host.
+/// Pure, so it can be tested. Reading the environment is unsafe to do from a
+/// test in this edition, and a function that reads it could not be checked.
 fn wants_token(url: &str) -> bool {
     let Some(rest) = url.strip_prefix("https://") else {
         return false;
@@ -337,15 +316,6 @@ mod tests {
     #[test]
     fn a_token_is_never_sent_over_plain_http() {
         assert!(!wants_token("http://github.com/anything"));
-    }
-
-    #[test]
-    fn a_date_comes_out_of_a_number_of_seconds() {
-        assert_eq!(date_of(0), "1970-01-01");
-        assert_eq!(date_of(1_735_689_600), "2025-01-01");
-        assert_eq!(date_of(1_757_260_800), "2025-09-07");
-        // A leap day, which is where a hand-written calendar goes wrong.
-        assert_eq!(date_of(1_709_164_800), "2024-02-29");
     }
 
     #[test]

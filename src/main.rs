@@ -44,7 +44,36 @@ fn main() -> ExitCode {
 /// Everything the process does, so that the only thing above it is the mapping
 /// from a failure to an exit code.
 fn run() -> Result<()> {
+    // The store is where everything the device keeps lives. Read-only commands
+    // take no lock; the ones that write will.
+    let store = spm::store::Store::new();
+
     match Cli::parse().command {
+        Command::ListSources => {
+            ui::list_sources(&ops::query::list_sources(&store)?);
+            Ok(())
+        }
+        Command::SourceInfo(args) => {
+            ui::source_info(&ops::query::source_info(&store, &args.url)?);
+            Ok(())
+        }
+        Command::AddSource(args) => {
+            // The one place a command needs the network before it writes.
+            let transport = spm::net::https::Https::new();
+            let added = ops::source::add_source(
+                &store,
+                &transport,
+                &args.url,
+                args.name.as_deref(),
+                args.default,
+            )?;
+            ui::added_source(&added);
+            Ok(())
+        }
+        Command::RemoveSource(args) => {
+            ui::removed_source(&ops::source::remove_source(&store, &args.url)?);
+            Ok(())
+        }
         Command::Create(args) => {
             let created = ops::create::create(&args.root, &args.metadata, &args.output)?;
             ui::created(&created);

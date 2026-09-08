@@ -60,6 +60,7 @@ src/
   store/
     config.rs       /etc/spm/sources.json
     db.rs           /var/lib/spm/installed/
+    index.rs        /var/lib/spm/index/ - the local copy of each index
     cache.rs        /var/cache/spm/
     atomic.rs       write-then-rename, and the install journal
     lock.rs         the single-writer lock

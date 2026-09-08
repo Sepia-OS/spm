@@ -10,6 +10,26 @@ once it has something to version.
 
 ### Added
 
+- `spm remove-source`, which removes a source and its local index and
+  **uninstalls nothing**. Packages installed from it stay, still recording
+  where they came from; what they lose is upgrades, and the command says how
+  many packages that is. If the removed source held the default flag it moves
+  to the last one standing, or — with several left, where nothing could guess —
+  the device is told it now has no default and how to name one.
+- `spm add-source`, which fetches the index before writing anything: that
+  proves the URL is a source rather than a typo, it is where the source's name
+  comes from, and it leaves the source usable without an `update` first. A
+  non-`https` URL is refused before anything is fetched. Re-adding a configured
+  URL updates its entry rather than duplicating it, and does not drop its
+  default flag. A name another URL already holds is refused, naming the holder
+  and pointing at `--name`.
+- `spm list-sources` and `spm source-info`, the first two commands a device
+  actually answers. They report what is configured, when each index was last
+  rebuilt, how many packages it offers and how many installed packages came
+  from it. A source whose index has never been fetched reads as exactly that
+  rather than as one offering nothing — the two look alike in a listing and
+  mean opposite things — and a device with no sources at all is told how to add
+  one rather than shown an error, since that is what a fresh card looks like.
 - Downloads that stream to disk and hash on the way past, never into memory: a
   package is 216 MiB and the smallest supported board has 512 MiB of RAM. A
   test measures the largest buffer the download ever asks for and fails if it

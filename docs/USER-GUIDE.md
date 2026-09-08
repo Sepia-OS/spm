@@ -191,10 +191,17 @@ what is installed. `--source <name>` narrows it to one source.
 
 ```console
 # spm list-sources
-NAME    URL                                                  DEFAULT  UPDATED           PACKAGES  INSTALLED
-sepia   https://sepia-os.github.io/packages/index.json        yes      2 hours ago            24          2
-local   https://example.invalid/pkgs/index.json               no       never                   -          0
+NAME   DEFAULT  UPDATED      PACKAGES  INSTALLED
+sepia  yes      2026-09-07         24          2
+       https://sepia-os.github.io/packages/index.json
+local  no       never               -          0
+       https://example.invalid/pkgs/index.json
 ```
+
+The date is the day the source last rebuilt its index, not the day you last
+fetched it. It is shown as a date rather than as "2 hours ago" because a
+relative time has to know what the time is now, and on a device that has just
+booted that is the one thing that cannot be relied on.
 
 A source shown as `never` updated has an index that has not been fetched yet,
 which is not the same as a source offering nothing — run `spm update` and it
