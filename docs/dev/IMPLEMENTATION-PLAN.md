@@ -204,9 +204,9 @@ Two choices worth recording:
 
 ---
 
-## M2 — Local state
+## M2 — Local state ✅
 
-### Step 8 — Root prefix
+### Step 8 — Root prefix ✅
 
 **Goal.** Every path is built from one configurable prefix.
 **Files.** `src/store/mod.rs`.
@@ -215,8 +215,22 @@ can install into a temporary directory. Introduce it before anything computes a
 path, or every later step has to be revisited.
 **Done when.** `/etc/spm/sources.json`, `/var/lib/spm/…` and `/var/cache/spm/`
 all come from it, and a test with a temporary prefix sees them relocate.
+**Done.** `Store`, with 5 tests: the real paths are what the documents say, and
+every one of them moves when the prefix does. No I/O — these are the names of
+files, not the files, so the module stays pure and the tests need no
+filesystem.
 
-### Step 9 — Atomic writes
+The prefix is deliberately **not** a command-line option. A package manager
+with a `--root` flag is one that can be pointed at the wrong system, and
+nothing in the architecture asks for it; it exists for the tests.
+
+One trap is documented in the code because it would be silent: `Path::join`
+throws the base away if its argument is absolute, so a single leading `/` in
+one of these fragments would write to the real system while a test believed it
+was sandboxed. Every fragment is relative, and the test that everything starts
+with the prefix is what would catch it.
+
+### Step 9 — Atomic writes ✅
 
 **Goal.** `write_atomic(path, bytes)`.
 **Files.** `src/store/atomic.rs`.
@@ -226,8 +240,27 @@ then `rename`. This is what makes an interrupted `update` leave the old index
 rather than half a file.
 **Done when.** A test writes over an existing file and asserts the old content
 is intact when the write fails partway.
+**Done.** `store::atomic::write` and `write_with`, with 7 tests. The failure
+case is the one that matters and it is tested directly: a write that dies after
+some bytes leaves the previous file byte-for-byte and no temporary behind.
 
-### Step 10 — The lock
+Three details the step named or implied, each with a test:
+
+- **The temporary file is in the destination directory.** A test reads that
+  directory *from inside the write* and asserts the temporary is there, so
+  moving it to `/tmp` — where a rename becomes a copy and a delete — fails a
+  test rather than quietly stopping being atomic.
+- **`sync_all` before the rename**, or a power cut can leave a renamed file
+  full of nothing, and a second sync of the directory afterwards so the rename
+  itself survives one. A filesystem that will not sync a directory is not a
+  reason to fail the write.
+- **`write_with` takes a closure** rather than only bytes, so an index can be
+  serialised straight into the file and a download streamed through it. Nothing
+  proportional to a package is ever held in memory.
+
+`tempfile` is the dependency, as the design's table said it would be.
+
+### Step 10 — The lock ✅
 
 **Goal.** One writer at a time.
 **Files.** `src/store/lock.rs`.
@@ -236,8 +269,25 @@ commands do not take it. The kernel releases it on death, so there is no stale
 lock to reason about.
 **Done when.** A test takes the lock in a child process and asserts the parent
 blocks and then reports what holds it.
+**Done.** `Lock::try_acquire`, `Lock::wait` and `Lock::holder`, with 5 tests.
 
-### Step 11 — `sources.json`
+**No `libc`, and no `unsafe`.** `std::fs::File::lock` has been stable since Rust
+1.89 and does exactly what was wanted, so the crate now contains no `unsafe` at
+all. `DESIGN.md` and the development guidelines have been corrected; the
+guidelines' `unsafe` section had been written around this one block.
+
+**Threads rather than a child process.** A lock belongs to the open file and not
+to the process that opened it, so two handles in one process contend exactly as
+two processes do — verified before relying on it. That is the whole content of
+the child-process test, without a helper binary to build and run.
+
+The holder writes its process id into the file *after* taking the lock, so a
+waiter can say what it is waiting for. Reading it takes nothing, so it can be
+stale by the time it is printed; it is a sentence for a person, not a decision.
+`store` prints nothing, so the sequence a command uses is try, read the holder,
+report through `ui`, then wait.
+
+### Step 11 — `sources.json` ✅
 
 **Goal.** Read and write the configuration.
 **Files.** `src/store/config.rs`.
@@ -245,8 +295,27 @@ blocks and then reports what holds it.
 Enforce on write: names unique, at most one default.
 **Done when.** Round-trip tests, a missing-file test that yields an empty list,
 and a test that rejects two sources with one name.
+**Done.** `Source` and `Sources`, with 12 tests, round-tripping through a real
+file under a temporary prefix rather than only through a string.
 
-### Step 12 — The installed database
+**The two invariants are enforced in two different ways, on purpose.** Reading
+checks them, because a hand-edited file can break either and the person who
+broke it needs to be told which — the message names both sources and both URLs.
+Writing cannot break them, because the only ways to change the list maintain
+them: `insert` replaces any entry with the same name *or* the same URL, and
+`set_default` takes the flag from whoever held it. That is why `save` does not
+validate: a check there would have no good error to give, since nothing is
+being read, and it would be checking something already true.
+
+Replacing by URL is also what `add-source` needs — re-running it on a
+configured URL updates that entry instead of adding a second one — and refusing
+a name another URL already holds stays a decision for `add-source`, which can
+say so properly.
+
+Written pretty-printed with a trailing newline: it is the one file somebody may
+open in an editor on the device, and a test says so rather than trusting it.
+
+### Step 12 — The installed database ✅
 
 **Goal.** Read, write and enumerate `installed/<name>.json`.
 **Files.** `src/store/db.rs`.
@@ -256,6 +325,31 @@ list and deletes them. `recover()` runs before any other work in every mutating
 command.
 **Done when.** A test writes a `.partial`, calls `recover()`, and asserts the
 files listed in it are gone and the record with them.
+**Done.** `Database`, with `get`, `all`, `is_installed`, `begin`, `commit`,
+`forget` and `recover`, and 10 tests.
+
+**A journal can only mean "undo", never "finish".** It is written before any
+file is, and nothing in it records how far the install got — so the only safe
+reading of one left behind is to take back what it claims. That asymmetry is
+what makes recovery possible at all, and it decides the next two points.
+
+- **A file a journal names and that does not exist is the ordinary case**, not a
+  failure: most of them will not exist, because the journal is written first.
+- **A file that exists and cannot be deleted is a failure**, and the journal is
+  left in place so the next command tries again rather than leaving a
+  half-installed package nothing remembers.
+
+A `.partial` is not an installed package: `all` and `is_installed` skip it, with
+a test, because an unfinished install must not look like a finished one.
+
+A record claiming a path outside the device's root is refused rather than
+obeyed — an absolute path would make `join` throw the root away, the same trap
+the store documents. Nothing here can write such a record; refusing beats
+deleting whatever it points at. **Step 30 needs the same rule** and should share
+this one rather than write a second.
+
+Directories are left where a rollback empties them. Pruning them is Step 34's,
+and rollback will use it once it exists.
 
 ---
 
@@ -288,6 +382,13 @@ good tree passes.
 **Notes.** The metadata packed *inside* the archive is the author's with the
 payload digest filled in — not the file they wrote. `SHA256SUMS` covers the
 outer archive and is what the index's package checksum comes from.
+
+**A version is not a validated filename.** `PackageName` and `Target` are
+checked where they are made, so they cannot escape a directory; `Version`
+deliberately accepts whatever upstream chose, including text with a `/` in it.
+The output name here is `<name>-<version>-<target>.tar.gz`, so this step is
+where that has to be refused — found while building the paths in Step 8, where
+it does not yet bite because nothing there is derived from a version.
 **Done when.** `spm create --root … --metadata …` produces all three,
 `sha256sum -c SHA256SUMS` passes, and the metadata inside the archive has a
 digest that matches its own `data.tar.gz`.

@@ -107,20 +107,21 @@ is a device left in a state nobody designed.
 
 ## `unsafe`
 
-Denied at crate level. The design has exactly one use for it — `flock` through
-`libc` — and it is isolated:
+Denied at crate level, and **the crate contains none**. The one use the design
+expected — `flock` through `libc` — turned out to be unnecessary:
+`std::fs::File::lock` has been stable since Rust 1.89.
+
+If a case ever does arise, it is isolated to the smallest possible module with
+`#[allow(unsafe_code)]`, and every block carries a `// SAFETY:` comment saying
+what invariant makes it sound:
 
 ```rust
-#[allow(unsafe_code)]
-mod lock {
-    // SAFETY: fd is owned by the File we hold for the duration of the call,
-    // and flock does not retain it. LOCK_EX | LOCK_NB is a valid operation.
-    ...
-}
+// SAFETY: fd is owned by the File we hold for the duration of the call, and
+// the call does not retain it.
 ```
 
-Every `unsafe` block carries a `// SAFETY:` comment saying what invariant makes
-it sound. A block without one does not pass review.
+A block without one does not pass review. Before writing the first one, check
+whether std has grown the thing you need — it did here.
 
 ## Types
 

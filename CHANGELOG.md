@@ -10,6 +10,42 @@ once it has something to version.
 
 ### Added
 
+- The installed database, and the journal that makes an interrupted install
+  recoverable. A record is written as `<name>.json.partial` listing every file
+  the install will write, *before* any of them exists, and renamed into place
+  only when they all do — so a marker left behind can only mean "undo this",
+  never "finish it", because nothing in it says how far the install got.
+  `recover` does that undoing and every command that writes runs it first. A
+  `.partial` is not an installed package, which the enumeration and the
+  installed check both know. A record claiming a path outside the device's root
+  is refused rather than obeyed.
+- `/etc/spm/sources.json`, read and written. An absent file is not an error: it
+  means no sources are configured, which is what a freshly installed card looks
+  like. Two invariants hold over it — names are unique, and at most one source
+  is the default — enforced when reading, where a hand-edited file can break
+  them and the message says which and where, and made impossible when writing,
+  because the only ways to change the list maintain them. It is written
+  pretty-printed, since it is the one file somebody may edit on the device.
+- The single-writer lock, held by every command that writes and by none that
+  only reads. The kernel owns it, so a killed `spm` leaves nothing stale behind
+  — there is no timeout to tune and no cleanup on the way back. The holder
+  records its process id so a waiter can say what it is waiting for. Built on
+  `std::fs::File::lock` rather than `flock` through `libc` as the design
+  expected, which means **the crate contains no `unsafe` and no C dependency**;
+  the design and the development guidelines have been corrected to match.
+- Atomic writes: bytes go to a temporary file in the destination directory, are
+  flushed to the disk, and are then renamed over the destination — so a device
+  that loses power mid-write finds the previous file rather than half of the
+  next one. The temporary lives beside its destination and not in `/tmp`,
+  because a rename across filesystems is a copy and a delete, which is the
+  non-atomic write the whole thing exists to avoid. A closure form exists so
+  that an index can be serialised straight into the file without building it in
+  memory first.
+- `Store`, which owns the root prefix every path is built from — the sources
+  file, the index copies, the installed records, the lock and the download
+  cache. It exists so the tests can run against a temporary directory rather
+  than the real `/`, and it is not a command-line option: a package manager
+  with a `--root` flag is one that can be pointed at the wrong system.
 - `Index` and `Record` — what a source publishes and what the device remembers.
   An index carries two digests per version under names that cannot be mistaken
   for one another, `sha256` for the package and `payload_sha256` for the
