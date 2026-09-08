@@ -37,6 +37,8 @@
     reason = "everything under tests/ is test code, and a test that cannot fail loudly is worse"
 )]
 
+pub mod net;
+
 use std::fs;
 use std::io::Read;
 use std::path::{Path, PathBuf};
@@ -289,4 +291,58 @@ pub fn rival(into: &Path) -> Built {
     Package::named("rival")
         .executable("usr/bin/plain", b"#!/bin/sh\necho not plain\n")
         .build(into)
+}
+
+/// An index describing built packages, as a source would publish it.
+///
+/// Built out of the real [`spm::model::index`] types rather than written as
+/// text, so a fixture index cannot describe a format that no longer exists —
+/// it would stop compiling instead.
+///
+/// # Panics
+///
+/// If a fixture is not well-formed enough to be indexed, which in a test is a
+/// failure and not something to recover from.
+pub fn index_of(source: &str, entries: &[(&Built, String)]) -> String {
+    use spm::model::index::{Index, IndexPackage, IndexVersion};
+    use spm::model::metadata::Sha256;
+    use spm::model::name::SourceName;
+
+    let mut packages: Vec<IndexPackage> = Vec::new();
+
+    for (built, url) in entries {
+        let metadata = built.packed_metadata();
+        let version = IndexVersion {
+            version: metadata.version.clone(),
+            target: metadata.target.clone(),
+            url: url.clone(),
+            sha256: Sha256::parse(&built.sha256).expect("create wrote a digest"),
+            payload_sha256: metadata
+                .sha256
+                .clone()
+                .expect("a packed metadata carries its payload digest"),
+            dependencies: metadata.dependencies.clone(),
+        };
+
+        // A package accumulates versions rather than replacing them, which is
+        // what the index does and what `upgrade` needs to see.
+        match packages
+            .iter_mut()
+            .find(|package| package.name == metadata.name)
+        {
+            Some(existing) => existing.versions.push(version),
+            None => packages.push(IndexPackage {
+                name: metadata.name.clone(),
+                description: metadata.description.clone(),
+                versions: vec![version],
+            }),
+        }
+    }
+
+    let index = Index {
+        name: SourceName::parse(source).expect("a source name"),
+        updated: 1_757_260_800,
+        packages,
+    };
+    serde_json::to_string_pretty(&index).expect("an index serialises")
 }
