@@ -141,6 +141,10 @@ The `<source>/<package>` form works with `install`, `remove`, `info` and
 
 ```console
 # spm upgrade
+Upgraded:
+  llvm-runtime  23.1.0     (dependency)
+  helix         25.07.1    (upgrade from 25.01.1)
+Download: 15.4 MiB.
 ```
 
 `upgrade` looks at everything installed and finds the newer versions your
@@ -148,15 +152,28 @@ indexes know about — so `spm update` first, or it will find nothing. It works
 out the whole set before changing anything, including any new dependencies the
 newer versions need.
 
+A newer version comes from the source the package was installed from. If that
+source has been removed, there is nowhere for it to be upgraded from, which is
+what `spm remove-source` warns about at the time.
+
 If one package cannot be upgraded — its new version needs something that cannot
 be satisfied — that package is left at the version it has and named, the rest
 are still upgraded, and `spm` exits non-zero. One package that cannot move is
 not a reason to leave the whole device unpatched.
 
-To upgrade just one package:
+```console
+# spm upgrade
+Upgraded:
+  helix  25.07.1    (upgrade from 25.01.1)
+Download: 15.4 MiB.
+grit stays at 1.2.6 - 1.3.0 is offered and cannot be installed: 'grit' needs …
+```
+
+To upgrade just one package, or to look before doing anything:
 
 ```console
 # spm upgrade helix
+# spm upgrade --dry-run
 ```
 
 ## Removing

@@ -274,6 +274,21 @@ pub enum Error {
         reason: String,
     },
 
+    /// Some packages moved and some could not.
+    ///
+    /// Its own variant rather than [`Error::Incomplete`], which is about
+    /// sources and says so. Both mean the same thing to a script — the picture
+    /// you were left with is not the whole one — and both leave the same code.
+    #[error(
+        "{} of {total} packages could not be upgraded: {} - they are still installed at the version they had, and everything else was upgraded", .held.len(), .held.join(", ")
+    )]
+    UpgradeIncomplete {
+        /// The packages left where they were, with the version they stay at.
+        held: Vec<String>,
+        /// How many were considered.
+        total: usize,
+    },
+
     /// Some of the work succeeded and some did not.
     #[error("{} of {total} sources could not be updated: {}", .failed.len(), .failed.join(", "))]
     Incomplete {
@@ -318,7 +333,7 @@ impl Error {
             Error::FileConflict { .. }
             | Error::FileUnowned { .. }
             | Error::HasDependents { .. } => 7,
-            Error::Incomplete { .. } => 8,
+            Error::Incomplete { .. } | Error::UpgradeIncomplete { .. } => 8,
         }
     }
 }
@@ -491,6 +506,13 @@ mod tests {
                 Error::Incomplete {
                     failed: vec!["local".to_owned()],
                     total: 2,
+                },
+                8,
+            ),
+            (
+                Error::UpgradeIncomplete {
+                    held: vec!["helix 25.07.1".to_owned()],
+                    total: 3,
                 },
                 8,
             ),

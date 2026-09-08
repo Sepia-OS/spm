@@ -258,24 +258,7 @@ pub fn installed(outcome: &crate::ops::install::Outcome) {
         }
     );
 
-    let width = plan
-        .steps
-        .iter()
-        .map(|step| step.selected.name.as_str().len())
-        .max()
-        .unwrap_or(4);
-    for step in &plan.steps {
-        // Trimmed, because a package with nothing to say about it would
-        // otherwise be a line ending in the padding of an empty column.
-        let line = format!(
-            "  {:<width$}  {:<10}{}",
-            step.selected.name.as_str(),
-            step.selected.version.version.to_string(),
-            note(step),
-            width = width
-        );
-        println!("{}", line.trim_end());
-    }
+    let width = steps(plan);
 
     for already in &plan.satisfied {
         println!(
@@ -291,6 +274,73 @@ pub fn installed(outcome: &crate::ops::install::Outcome) {
         // The point of --dry-run, said plainly rather than left to be inferred
         // from the absence of anything else.
         println!("Nothing was changed.");
+    }
+}
+
+/// Print the packages a plan would put on the device, and say how wide the
+/// name column came out so that anything printed after them lines up.
+///
+/// Shared with `upgrade`, whose plan is an install plan like any other.
+fn steps(plan: &crate::ops::install::Plan) -> usize {
+    let width = plan
+        .steps
+        .iter()
+        .map(|step| step.selected.name.as_str().len())
+        .max()
+        .unwrap_or(4);
+
+    for step in &plan.steps {
+        // Trimmed, because a package with nothing to say about it would
+        // otherwise be a line ending in the padding of an empty column.
+        let line = format!(
+            "  {:<width$}  {:<10}{}",
+            step.selected.name.as_str(),
+            step.selected.version.version.to_string(),
+            note(step),
+            width = width
+        );
+        println!("{}", line.trim_end());
+    }
+
+    width
+}
+
+/// Say what `upgrade` did, including what it could not do.
+pub fn upgraded(report: &crate::ops::upgrade::Report) {
+    recovered(&report.rolled_back);
+
+    if report.is_empty() {
+        // "Everything is current" and "nothing could be moved" are opposite
+        // things, and a package that is being held back is not a package that
+        // is up to date.
+        if report.held.is_empty() {
+            println!("Everything is already at the newest version the indexes offer.");
+        } else {
+            println!("Nothing could be upgraded.");
+        }
+    } else {
+        println!(
+            "{}",
+            if report.changed {
+                "Upgraded:"
+            } else {
+                "The following will be upgraded:"
+            }
+        );
+        steps(&report.plan);
+        println!("Download: {}.", size(report.plan.download));
+        if !report.changed {
+            println!("Nothing was changed.");
+        }
+    }
+
+    for held in &report.held {
+        // To stderr, like `update`'s failures: a script reading the listing
+        // should not have to sift these out of it.
+        eprintln!(
+            "{} stays at {} - {} is offered and cannot be installed: {}",
+            held.name, held.installed, held.offered, held.why
+        );
     }
 }
 

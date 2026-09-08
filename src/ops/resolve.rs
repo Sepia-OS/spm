@@ -217,7 +217,12 @@ struct Pending {
     parent: Option<usize>,
 }
 
-/// The whole set to install: this package, and everything it needs.
+/// The whole set to install: these packages, and everything they need.
+///
+/// Takes the roots with the reason each is to be recorded under, because that
+/// is not always the same answer: `install` asks for a package by name and it
+/// becomes explicit whatever it was before, while `upgrade` moves a package
+/// that may have come in as a dependency and has to leave it one.
 ///
 /// Breadth-first over the transitive dependencies. Three rules decide what
 /// comes in, and all three exist so that installing one package does not
@@ -233,28 +238,32 @@ struct Pending {
 ///   makes installing a second package that needs `llvm-runtime` cost nothing.
 ///
 /// The result lists everything that came in as a dependency first, in the order
-/// it was discovered, and the package that was asked for last. That is a
-/// reading order and not an installation order: a package is files and nothing
-/// else — there are no maintainer scripts, and musl has no `ld.so.cache` — so
-/// nothing depends on which of them is written first.
+/// it was discovered, and the roots last, in the order they were given. That is
+/// a reading order and not an installation order: a package is files and
+/// nothing else — there are no maintainer scripts, and musl has no
+/// `ld.so.cache` — so nothing depends on which of them is written first.
+///
+/// **A circle is only found below a root.** Two roots that need each other are
+/// not reported as one, and should not be: both are in the set already, so the
+/// set *can* be completed, which is the only thing a circle would have made
+/// impossible.
 ///
 /// # Errors
 ///
 /// [`Error::DependencyCycle`] if the packages need each other in a circle,
 /// [`Error::DependencyNotSatisfiable`] if a dependency exists but not new
 /// enough, and whatever [`find`] gives for one that is missing or ambiguous.
-pub fn with_dependencies(store: &Store, root: &Selected, target: &Target) -> Result<Vec<Needed>> {
+pub fn with_dependencies(store: &Store, roots: &[Needed], target: &Target) -> Result<Vec<Needed>> {
     let installed = Database::new(store).all()?;
 
-    let mut set: Vec<Pending> = vec![Pending {
-        needed: Needed {
-            selected: root.clone(),
-            // Whatever it was here for before, it is asked for now.
-            reason: Reason::Explicit,
-        },
-        parent: None,
-    }];
-    let mut queue: VecDeque<usize> = VecDeque::from([0]);
+    let mut set: Vec<Pending> = roots
+        .iter()
+        .map(|root| Pending {
+            needed: root.clone(),
+            parent: None,
+        })
+        .collect();
+    let mut queue: VecDeque<usize> = (0..set.len()).collect();
 
     while let Some(at) = queue.pop_front() {
         let wants = set[at].needed.selected.clone();
@@ -308,10 +317,10 @@ pub fn with_dependencies(store: &Store, root: &Selected, target: &Target) -> Res
         }
     }
 
-    // Dependencies first, the package that was asked for last, which is the
-    // order somebody reading the plan expects to see them in.
+    // Dependencies first, the roots last, which is the order somebody reading
+    // the plan expects to see them in.
     let mut needed: Vec<Needed> = set.into_iter().map(|pending| pending.needed).collect();
-    needed.rotate_left(1);
+    needed.rotate_left(roots.len());
     Ok(needed)
 }
 
