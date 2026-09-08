@@ -10,6 +10,27 @@ once it has something to version.
 
 ### Added
 
+- `spm search`, `spm info` and `spm list`. A search matches part of a name and
+  ignores case; a package two sources offer is shown qualified; a package built
+  for another machine is listed without a version rather than hidden, because
+  "it exists, just not for you" is worth knowing. `info` shows every source
+  that offers a package rather than refusing — unlike `install`, telling
+  somebody about all of them is the answer to what they asked — along with the
+  other versions on offer, what it depends on, and whether it is installed. A
+  search that matches nothing says so rather than advising a search.
+- Name resolution: `helix` or `sepia/helix` becomes one package, in one source,
+  at one version. A name two sources offer is refused and listed in the form it
+  has to be typed back, because picking one would mean installing something
+  other than what was meant. "No such source", "that source does not have it"
+  and "not built for this machine" are three different answers with three
+  different fixes, and the last one lists the machines it *is* built for.
+- `spm update`, which fetches each source's index and puts it in place whole or
+  not at all — an index that arrives as nonsense leaves the previous one
+  untouched, because a device with a stale index can still install and a device
+  with half an index can do nothing. One unreachable source does not stop the
+  others: every source is attempted, each failure is named, and the command
+  finishes non-zero so a script can tell an incomplete picture from a complete
+  one. With it, the single-writer lock is now taken by the commands that write.
 - `spm remove-source`, which removes a source and its local index and
   **uninstalls nothing**. Packages installed from it stay, still recording
   where they came from; what they lose is upgrades, and the command says how

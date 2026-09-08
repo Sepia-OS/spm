@@ -750,9 +750,9 @@ and somebody removing a source should be told that in words.
 
 ---
 
-## M6 — `update` and the read-only queries
+## M6 — `update` and the read-only queries ✅
 
-### Step 24 — `update`
+### Step 24 — `update` ✅
 
 **Goal.** Fetch indexes and put them in place atomically.
 **Files.** `src/ops/update.rs`.
@@ -763,8 +763,30 @@ neither is given.
 **Done when.** Tests for: a broken index leaves the previous one intact; one
 failing source of three still updates the other two and exits non-zero; both
 options together is a usage error.
+**Done.** `update`, the subcommand, and 10 tests — all three cases plus the
+counting of what is new, a named source fetching only itself, and a device with
+no sources succeeding at doing nothing.
 
-### Step 25 — Name resolution
+**Doing the work and deciding the outcome are separate.** `update` returns a
+report; `Report::outcome` turns it into a failure. The caller prints everything
+that happened *and then* fails, so a script sees both the two sources that
+updated and the one that did not. A command that failed on the first problem
+would hide the successes it had already had.
+
+**The mutual exclusion is `clap`'s**, with `conflicts_with`, so a wrong command
+line never reaches `ops` at all — and the test checks the definition rather
+than the command, which is where the rule actually lives.
+
+Two things this step needed around it:
+
+- **The lock.** `update` writes, so `main` now takes the single-writer lock for
+  it and for `add-source` and `remove-source`. The sequence the design asks for
+  — try, say who holds it, then wait — lives in `main`, because `store` prints
+  nothing and `ops` prints nothing.
+- **Failures go to stderr**, the listing to stdout, so a script reading the
+  listing does not have to sift failures out of it.
+
+### Step 25 — Name resolution ✅
 
 **Goal.** A typed name becomes a package in a source.
 **Files.** `src/ops/resolve.rs`.
@@ -774,8 +796,32 @@ Version selection: the one asked for, else the highest whose `target` matches
 the device.
 **Done when.** Tests for all four outcomes, plus a package present only for
 another target being reported as not available for this one.
+**Done.** `candidates`, `find` and `select`, with 12 tests: all four outcomes,
+both target cases, and the version selection either way.
 
-### Step 26 — `search`, `info`, `list`
+**Three failures that look alike are kept apart**, because each has a different
+fix:
+
+- *no such source* — the source was named and is not configured;
+- *that source does not have it* — the source is fine, the package is not
+  there;
+- *not built for this machine* — it exists, for other targets, and the message
+  lists them.
+
+A single "not found" would have been easier and would have sent people looking
+in the wrong place. The same care applies to a version asked for by name: one
+that exists only for another target is a target problem, not a missing version.
+
+**`Target::current()`** is how a device knows what it can install, built from
+the compiler's own idea of the machine — `aarch64-musl` on a card. On anything
+else it gives that machine's honest answer, so a workstation is told that a
+package built for a card is not built for it. Which is true, and better than a
+card-shaped lie.
+
+An ambiguous name is listed **in the form the user has to type back**, sorted,
+so the listing does not depend on the order the configuration happens to be in.
+
+### Step 26 — `search`, `info`, `list` ✅
 
 **Goal.** The three read-only package queries.
 **Files.** `src/ops/query.rs`.
@@ -785,6 +831,29 @@ metadata plus what only the client knows — source, installed state, the other
 versions. `list` is one line per package with an installed marker.
 **Done when.** Tests for each, including `search` finding a package by a
 substring of its name and `info --version` selecting an older one.
+**Done.** `search`, `list` and `info`, three subcommands, and 15 tests.
+
+**`info` does not refuse an ambiguous name.** Where `install` has to — picking
+one would install something other than what was meant — `info` shows every
+source that offers the package, because telling somebody about all of them *is*
+the answer to what they asked. Only the commands that do something have to
+refuse.
+
+**A package built for another machine is listed without a version** rather than
+hidden. It exists, and "it exists, just not for you" is worth knowing; hiding
+it would leave somebody searching for a name they had seen elsewhere.
+
+**Installed is per source.** The same name from two sources is two packages,
+and only one of them is on the device — so a line is marked installed only when
+the record's source matches the line's.
+
+`search` finding nothing gets `Error::NothingMatched` rather than
+`PackageNotFound`, whose advice is to run `spm search` — which is what has just
+happened. Same exit code, an answer that helps.
+
+One test of mine was wrong and the code was right: I expected the version list
+descending as `25.07.1, 4.4.1, 23.1.0`, which is a string sort. It is
+`25.07.1, 23.1.0, 4.4.1`, exactly as Step 4's ordering says.
 
 ---
 
