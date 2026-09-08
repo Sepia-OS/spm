@@ -62,8 +62,14 @@ never has to download a package to find out what it is. Searching, comparing
 versions, reading a description and working out what a package depends on are
 all answered out of the index alone. Each entry holds the package's name and
 description, and for every version of it: the target it was built for, its
-dependencies and their versions, where the package can be downloaded, and two
-checksums.
+dependencies and their versions, where the package can be downloaded, how big
+it is, and two checksums.
+
+The size is there because both things that need it happen before anything is
+fetched: `install` says what it is about to download, and it refuses when the
+card has no room rather than filling the root filesystem finding out. A scan
+reads it off the release listing, like the rest of this, without downloading
+the package.
 
 Both checksums are needed, because they say different things:
 

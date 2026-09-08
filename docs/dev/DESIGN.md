@@ -64,6 +64,7 @@ src/
     cache.rs        /var/cache/spm/
     atomic.rs       write-then-rename, and the install journal
     lock.rs         the single-writer lock
+    space.rs        how much room is left on the card
   net/
     transport.rs    trait Transport - the seam the tests replace
     https.rs        the real one: ureq + rustls + compiled-in roots
@@ -122,6 +123,7 @@ that could differ between versions of `spm`.
           "version": "25.07.1",
           "target": "aarch64-musl",
           "url": "https://…/helix-25.07.1-aarch64-musl.tar.gz",
+          "bytes": 16148070,
           "sha256": "…",
           "payload_sha256": "…",
           "dependencies": [ { "name": "llvm-runtime", "version": "23.1.0" } ]
@@ -136,6 +138,11 @@ that could differ between versions of `spm`.
 `metadata.json` carries for `data.tar.gz`. The architecture explains why both
 exist; the client checks them at different moments and must not confuse them,
 so they are not called the same thing.
+
+`bytes` is the size of the package as published. It is in the index rather than
+discovered from the server because the two things that need it — the plan
+`install` prints, and the check that the card has room — both happen *before*
+anything is fetched.
 
 ### `/var/lib/spm/installed/<name>.json`
 
@@ -206,24 +213,34 @@ any failed.
    already installed at a satisfying version is not reinstalled. A cycle is
    detected by the visited set and reported rather than followed.
 4. **Plan and show.** The set, what is new, what is an upgrade, the total
-   download. `--dry-run` stops here.
+   download. `--dry-run` stops here and touches nothing at all. Then the room:
+   a package is on the card twice while it installs, so an install that would
+   need more than is free is refused here, before anything is fetched.
 5. **Download** each package to `/var/cache/spm/`, hashing the stream as it is
    written, and compare with the index's `sha256` **before the archive is
    opened**. A mismatch is refused there.
 6. **Open** the outer archive, read `metadata.json`, hash `data.tar.gz` and
-   compare with its `sha256`. Refuse on mismatch.
+   compare with its `sha256`. Refuse on mismatch. The payload is read where it
+   lies rather than written out first: staging it would put the package on the
+   card a third time, on top of the archive and the tree it unpacks to.
 7. **Dry-run the extraction**: read the payload's entries and build the file
    list without writing anything, and check every path against the rules in
    *Unpacking*, and against ownership — a path claimed by another package's
    record, or already present on disk and claimed by none, stops the install
-   before a single file is written.
+   before a single file is written. A path the package's *own* record claims is
+   neither: replacing those is what an upgrade is.
 8. **Commit.** Write `installed/<name>.json.partial` with the full file list,
    then extract, then rename the record to `.json`. The record exists before
    the files do, so an interrupted install is recoverable in exactly one
-   direction.
+   direction. An upgrade then takes away the files the version it replaced had
+   put there and the new one does not ship — after the rename, so that a crash
+   leaves files that are merely stale rather than files nothing remembers.
 9. **Recover, if needed.** Any `.partial` found at startup is an install that
    did not finish: its files are removed and the record deleted, before
-   anything else runs. There is no half-installed state that survives the next
+   anything else runs. Except a file some committed record claims — an
+   interrupted upgrade's journal names the files of the version still installed,
+   and taking those back would leave a package whose record says it is whole and
+   whose files are gone. There is no half-installed state that survives the next
    invocation.
 
 ### `remove`
@@ -356,6 +373,7 @@ container and a macOS workstation:
 | `tar` | archives | Reading and writing, streaming both ways. |
 | `tempfile` | staging | Temporary files in the destination directory, cleaned up on drop. |
 | `thiserror` | errors | The enum above, without the boilerplate. |
+| `rustix` (`fs`) | free space | `statvfs`, which `std` has no equivalent of. Already in the tree under `tempfile`, and safe, so the crate still has no `unsafe`. |
 
 `Cargo.lock` is committed. `spm` is a binary, its builds have to be
 reproducible, and the `.gitignore` this repository started from ignores the
@@ -444,8 +462,5 @@ What `spm` trusts, and what it does not:
   network; it does not protect the device from a source that has been taken
   over. Signing the index, and pinning a key per source in `sources.json`, is
   the obvious next layer.
-- **Downgrades are not specified.** `install --version` can name an older
-  version than the installed one; whether that is a downgrade, an error, or a
-  no-op is undecided.
 - **There is no `verify` command** to re-check installed files against their
   records. The data to do it is already there.

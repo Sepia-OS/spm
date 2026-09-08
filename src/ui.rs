@@ -72,6 +72,32 @@ pub fn date(seconds: u64) -> String {
     format!("{year:04}-{month:02}-{day:02}")
 }
 
+/// A number of bytes, the way a person reads one.
+///
+/// Binary multiples, because that is what a card's free space is measured in
+/// and the two numbers appear in the same sentence when an install will not
+/// fit. Here rather than in `error` so that there is one of these: an error
+/// carries the text and `ops` composes it, the same way the clock message is
+/// built out of [`date`].
+#[must_use]
+pub fn size(bytes: u64) -> String {
+    const UNITS: [&str; 5] = ["B", "KiB", "MiB", "GiB", "TiB"];
+
+    let mut amount = bytes as f64;
+    let mut unit = 0;
+    while amount >= 1024.0 && unit + 1 < UNITS.len() {
+        amount /= 1024.0;
+        unit = unit.saturating_add(1);
+    }
+
+    let name = UNITS.get(unit).copied().unwrap_or("B");
+    if unit == 0 {
+        format!("{bytes} {name}")
+    } else {
+        format!("{amount:.1} {name}")
+    }
+}
+
 /// Print every configured source, or say that there are none.
 pub fn list_sources(reports: &[crate::ops::query::SourceReport]) {
     if reports.is_empty() {
@@ -201,6 +227,109 @@ pub fn updated(report: &crate::ops::update::Report) {
     }
 }
 
+/// Say what an install did, or what it would have done.
+///
+/// The set first, dependencies before the package that was asked for, then the
+/// download. A dry run prints the same thing and says that it changed nothing,
+/// so that the two are comparable line for line.
+pub fn installed(outcome: &crate::ops::install::Outcome) {
+    recovered(&outcome.rolled_back);
+
+    let plan = &outcome.plan;
+    if plan.is_empty() {
+        for already in &plan.satisfied {
+            println!(
+                "{} {} is already installed.",
+                already.name, already.version.version
+            );
+        }
+        if plan.satisfied.is_empty() {
+            println!("There is nothing to install.");
+        }
+        return;
+    }
+
+    println!(
+        "{}",
+        if outcome.changed {
+            "Installed:"
+        } else {
+            "The following will be installed:"
+        }
+    );
+
+    let width = plan
+        .steps
+        .iter()
+        .map(|step| step.selected.name.as_str().len())
+        .max()
+        .unwrap_or(4);
+    for step in &plan.steps {
+        // Trimmed, because a package with nothing to say about it would
+        // otherwise be a line ending in the padding of an empty column.
+        let line = format!(
+            "  {:<width$}  {:<10}{}",
+            step.selected.name.as_str(),
+            step.selected.version.version.to_string(),
+            note(step),
+            width = width
+        );
+        println!("{}", line.trim_end());
+    }
+
+    for already in &plan.satisfied {
+        println!(
+            "  {:<width$}  {:<10}(already installed)",
+            already.name.as_str(),
+            already.version.version.to_string(),
+            width = width
+        );
+    }
+
+    println!("Download: {}.", size(plan.download));
+    if !outcome.changed {
+        // The point of --dry-run, said plainly rather than left to be inferred
+        // from the absence of anything else.
+        println!("Nothing was changed.");
+    }
+}
+
+/// What a step does to what is already on the device.
+fn note(step: &crate::ops::install::Step) -> String {
+    use crate::ops::install::Change;
+
+    let what = match &step.change {
+        Change::New => String::new(),
+        Change::Replaces(replaced) if replaced.source != step.selected.source => format!(
+            "(replaces {}/{} {})",
+            replaced.source, step.selected.name, replaced.version
+        ),
+        Change::Replaces(replaced) if replaced.version < step.selected.version.version => {
+            format!("(upgrade from {})", replaced.version)
+        }
+        // Lower, or equal from the same source — which cannot reach here, so
+        // this is the downgrade `install --version` allows and names.
+        Change::Replaces(replaced) => format!("(downgrade from {})", replaced.version),
+    };
+
+    match (step.is_dependency(), what.is_empty()) {
+        (true, true) => "(dependency)".to_owned(),
+        (true, false) => format!("{what} (dependency)"),
+        (false, _) => what,
+    }
+}
+
+/// Say what an unfinished install left behind and what became of it.
+pub fn recovered(names: &[crate::model::name::PackageName]) {
+    for name in names {
+        // To stderr: it is not part of the answer to what was asked, and a
+        // script reading a listing should not have to sift it out.
+        eprintln!(
+            "An earlier install of '{name}' had not finished; the files it had written have been removed."
+        );
+    }
+}
+
 /// Say that another `spm` holds the lock, and what is being waited for.
 pub fn waiting_for_lock(holder: Option<u32>) {
     match holder {
@@ -300,6 +429,18 @@ pub fn package_detail(details: &[crate::ops::query::Detail]) {
 )]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_size_is_written_the_way_a_person_reads_one() {
+        assert_eq!(size(0), "0 B");
+        assert_eq!(size(512), "512 B");
+        assert_eq!(size(1024), "1.0 KiB");
+        // The number the user guide shows for a helix-sized package.
+        assert_eq!(size(16_148_070), "15.4 MiB");
+        assert_eq!(size(2 * 1024 * 1024 * 1024), "2.0 GiB");
+        // Nothing overflows off the end of the table.
+        assert!(size(u64::MAX).ends_with("TiB"));
+    }
 
     #[test]
     fn a_date_comes_out_of_a_number_of_seconds() {

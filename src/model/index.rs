@@ -74,6 +74,15 @@ pub struct IndexVersion {
     /// is refused by the transport, where refusing costs one package; refusing
     /// it here would throw away a whole index over one bad entry.
     pub url: String,
+    /// How big the package is, in bytes.
+    ///
+    /// Here rather than discovered by asking the server, because both things
+    /// that need it happen **before** anything is fetched: the plan `install`
+    /// shows says what it is about to download, and the check that the card has
+    /// room refuses before filling the root filesystem rather than after. A
+    /// scan can read it off a release listing without downloading the package,
+    /// which is the property the whole index format is built around.
+    pub bytes: u64,
     /// The digest of the package as published, checked before it is opened.
     pub sha256: Sha256,
     /// The digest of the `data.tar.gz` inside it, checked before it is
@@ -109,6 +118,22 @@ impl IndexPackage {
             .iter()
             .filter(|entry| &entry.target == target)
             .max_by(|left, right| left.version.cmp(&right.version))
+    }
+
+    /// The oldest version built for this target that is not older than `floor`.
+    ///
+    /// The **oldest**, where [`IndexPackage::newest`] takes the newest, and the
+    /// difference is the whole of what a dependency means. `dependencies` names
+    /// a floor — that version or a newer one — so the least that satisfies it is
+    /// what an install should bring in. Taking the newest instead would drag
+    /// every dependency to its latest release on the strength of one package
+    /// asking for an old one.
+    #[must_use]
+    pub fn lowest_from(&self, target: &Target, floor: &Version) -> Option<&IndexVersion> {
+        self.versions
+            .iter()
+            .filter(|entry| &entry.target == target && &entry.version >= floor)
+            .min_by(|left, right| left.version.cmp(&right.version))
     }
 
     /// The targets this package is offered for, in the order the index lists
@@ -153,6 +178,7 @@ mod tests {
           "version": "25.07.1",
           "target": "aarch64-musl",
           "url": "https://example.test/helix-25.07.1-aarch64-musl.tar.gz",
+          "bytes": 16148070,
           "sha256": "{package}",
           "payload_sha256": "{payload}",
           "dependencies": [ {{ "name": "llvm-runtime", "version": "23.1.0" }} ]
@@ -178,6 +204,9 @@ mod tests {
         assert_eq!(index.packages.len(), 1);
         assert_eq!(index.packages[0].name.as_str(), "helix");
         assert_eq!(index.packages[0].versions.len(), 1);
+        // What the plan shows and what the space check works from, both of
+        // which happen before a byte is fetched.
+        assert_eq!(index.packages[0].versions[0].bytes, 16_148_070);
     }
 
     #[test]
@@ -218,6 +247,7 @@ mod tests {
                     "version": "{version}",
                     "target": "{target}",
                     "url": "https://example.test/p.tar.gz",
+                    "bytes": 1024,
                     "sha256": "{d}",
                     "payload_sha256": "{d}",
                     "dependencies": []
@@ -255,6 +285,45 @@ mod tests {
         // 25.07.1 beats 23.1.0 and 4.4.1, and 26.0.0 is for another machine.
         assert_eq!(newest.version.as_str(), "25.07.1");
         assert_eq!(newest.target.as_str(), "aarch64-musl");
+    }
+
+    #[test]
+    fn the_oldest_version_that_satisfies_a_floor_is_the_one_a_dependency_gets() {
+        // 23.1.0 and 25.07.1 both satisfy ">= 5.0"; a dependency takes the
+        // lower, or one package asking for an old version would drag every
+        // other package to its newest release.
+        let index = several_versions();
+        let package = index
+            .package(&PackageName::parse("helix").unwrap())
+            .unwrap();
+        let target = Target::parse("aarch64-musl").unwrap();
+
+        let chosen = package
+            .lowest_from(&target, &Version::parse("5.0").unwrap())
+            .unwrap();
+        assert_eq!(chosen.version.as_str(), "23.1.0");
+
+        // A floor below everything takes the oldest there is.
+        let oldest = package
+            .lowest_from(&target, &Version::parse("0").unwrap())
+            .unwrap();
+        assert_eq!(oldest.version.as_str(), "4.4.1");
+
+        // And a floor above everything is not satisfiable at all.
+        assert!(
+            package
+                .lowest_from(&target, &Version::parse("99.0").unwrap())
+                .is_none()
+        );
+        // 26.0.0 would satisfy it, and is for another machine.
+        assert!(
+            package
+                .lowest_from(
+                    &Target::parse("x86_64-musl").unwrap(),
+                    &Version::parse("26.0.0").unwrap()
+                )
+                .is_some()
+        );
     }
 
     #[test]

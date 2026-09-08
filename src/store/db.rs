@@ -188,6 +188,12 @@ impl<'store> Database<'store> {
             }
         };
 
+        // What is properly installed, read once. A journal may name a file that
+        // one of these owns — an interrupted upgrade claims the files of the
+        // version still on the device — and taking those back would leave a
+        // package whose record says it is whole and whose files are not.
+        let committed = self.all()?;
+
         let mut undone = Vec::new();
         for entry in entries {
             let path = entry
@@ -201,7 +207,7 @@ impl<'store> Database<'store> {
                 .is_some_and(|extension| extension == "partial")
             {
                 if let Some(record) = read_record(&path)? {
-                    self.undo(&record)?;
+                    self.undo(&record, &committed)?;
                     undone.push(record.metadata.name.clone());
                 }
                 // Only once every file it named is gone.
@@ -217,8 +223,21 @@ impl<'store> Database<'store> {
     }
 
     /// Delete the files a journal claims, and nothing else.
-    fn undo(&self, record: &Record) -> Result<()> {
+    ///
+    /// Except a file some committed record claims. An install that did not
+    /// finish is undone; a package that *did* finish is not collateral. That
+    /// case is an upgrade interrupted partway: the journal for the new version
+    /// names the files of the old one, which is still recorded and still
+    /// running. Leaving one of them holding the newer version's contents is a
+    /// state the next install puts right; deleting it is not.
+    fn undo(&self, record: &Record, committed: &[Record]) -> Result<()> {
         for file in &record.files {
+            if committed
+                .iter()
+                .any(|other| other.files.iter().any(|owned| owned == file))
+            {
+                continue;
+            }
             let Some(path) = under(self.store.root(), file) else {
                 // A record naming an absolute path or one with `..` in it did
                 // not come from this crate. Refusing beats deleting whatever
@@ -454,6 +473,40 @@ mod tests {
 
         assert!(directory.path().join("usr/bin/grit").exists());
         assert!(db.is_installed(&package("grit")).unwrap());
+    }
+
+    #[test]
+    fn a_rollback_does_not_take_a_file_a_finished_install_owns() {
+        // An upgrade interrupted partway: the journal for the new version
+        // names the files of the version still on the device. Taking those
+        // back would leave a package whose record says it is whole and whose
+        // files are gone.
+        let directory = tempfile::tempdir().unwrap();
+        let store = Store::at(directory.path());
+        let db = Database::new(&store);
+        let shared = ["usr/bin/hx"];
+        let new_only = ["usr/lib/helix/new.so"];
+        with_files(directory.path(), &shared);
+        with_files(directory.path(), &new_only);
+
+        // The version that is installed.
+        db.begin(&record("helix", &shared)).unwrap();
+        db.commit(&package("helix")).unwrap();
+        // And the upgrade that did not finish, which claims both.
+        db.begin(&record("helix", &["usr/bin/hx", "usr/lib/helix/new.so"]))
+            .unwrap();
+
+        assert_eq!(db.recover().unwrap(), vec![package("helix")]);
+
+        assert!(
+            directory.path().join("usr/bin/hx").exists(),
+            "the installed version lost a file to the rollback"
+        );
+        assert!(
+            !directory.path().join("usr/lib/helix/new.so").exists(),
+            "the unfinished install left a file behind"
+        );
+        assert!(db.is_installed(&package("helix")).unwrap());
     }
 
     #[test]

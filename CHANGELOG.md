@@ -10,6 +10,50 @@ once it has something to version.
 
 ### Added
 
+- `spm install`, which puts a package and everything it needs on the device.
+  Dependencies are worked out first and brought in at the **oldest** version
+  that satisfies them, because a floor is a floor and taking the newest would
+  upgrade half a card on the strength of one package asking for something old;
+  one already installed at a new enough version is left exactly where it is,
+  and one the user had asked for by name stays theirs rather than being demoted
+  to a dependency. Packages that need each other in a circle are reported as
+  the circle they form rather than looped over, and a dependency that exists
+  but is too old names the package that wanted it and the newest there is.
+- Two checksums on every install, at two different moments. The package is
+  checked against the digest the index carries for it **before it is opened at
+  all**, so an archive that was corrupted or substituted on the way is never
+  parsed; the `data.tar.gz` inside it is then checked against the digest its own
+  `metadata.json` carries, which catches a package rebuilt around a different
+  payload even when the archive is perfectly well formed. Either failure exits
+  6, and the message says which of the two it was.
+- Extraction that refuses rather than trusts. A package writes under `usr/` and
+  nowhere else; paths are relative and stay inside the device's root; only
+  regular files, directories and symbolic links, so no device node and no hard
+  link to `/etc/shadow`; a link's target is checked the same way a path is;
+  permissions come from the archive and **ownership never does** — restoring
+  the uid a package was built under is what broke helix's CI. Nothing is
+  followed: a symbolic link at a destination, or standing in for one of the
+  directories on the way to it, is refused and never written through.
+- `install` refuses rather than overwrites, before a single file is written. A
+  file another package owns is a conflict naming both; a file nothing owns came
+  from the system image or from somebody's hand, and adopting it would mean
+  `remove` later deleting something `spm` never installed. Both exit 7.
+- An install that does not finish leaves nothing half-done. The record is
+  written before the first file and renamed into place after the last, so the
+  next command finds the unfinished one, removes what it had written and starts
+  clean — leaving alone any file a package that *did* finish still owns, which
+  is what an interrupted upgrade would otherwise take away from the version
+  still running.
+- `spm install --dry-run`, which works the whole set out, prints it with what it
+  would download, and touches nothing — not a file, not a record, not the
+  network. `install` itself does not stop to ask; `--dry-run` is how to look
+  first. `--version` installs a particular version, including an older one than
+  the one installed, which the plan names as a downgrade.
+- A check that the card has room, before anything is fetched. A package is on
+  it twice while it installs — the download and the unpacked files — so an
+  install needs about twice what it downloads, and one that would not fit is
+  refused with what is needed and what is free rather than filling the root
+  filesystem finding out.
 - `spm search`, `spm info` and `spm list`. A search matches part of a name and
   ignores case; a package two sources offer is shown qualified; a package built
   for another machine is listed without a version rather than hidden, because
@@ -73,6 +117,10 @@ once it has something to version.
   `GITHUB_TOKEN` is sent to GitHub and to no other host, checked on the whole
   host name. Compressed transfers are not asked for, since everything here is
   checked against a digest of a file.
+- `rustix`, for the one thing `std` has no equivalent of: how much room is left
+  on a filesystem. `tempfile` already pulls it into the tree, so it adds nothing
+  to the build, and it wraps `statvfs` safely — which is what keeps the promise
+  that this crate contains no `unsafe` at all.
 - `Transport`, the one seam between `spm` and the network: fetch a URL, get
   something to read. Everything above it takes a `&dyn Transport`, so a test
   drives the real `update`, the real `install` and the real verification with
@@ -301,6 +349,24 @@ once it has something to version.
 
 ### Changed
 
+- **An index entry now carries the size of the package**, as `bytes`, and one
+  written without it is refused. Both things that need a package's size happen
+  before it is fetched — the download total `spm install` prints, and the check
+  that there is room for it — and it was in neither the index nor anywhere else
+  a device can see. A source's scan reads it off a release listing without
+  downloading anything, which is the property the index format is built around,
+  so it costs a source nothing.
+- The user guide showed `spm install` asking `Proceed? [Y/n]`, which it does
+  not. Neither the architecture nor the design ever specified a prompt, and one
+  without a `--yes` would make `install` unusable from a script — including from
+  the release workflow that will publish `spm` as a package. `--dry-run` is how
+  to look before installing, and the guide now says so.
+- Installing an older version than the one on the device is now settled: it
+  replaces it, and the plan names it as a downgrade. It had been left open in
+  both the design and the plan, and any behaviour settles it.
+- `spm update`, `spm add-source` and `spm remove-source` now take back an
+  unfinished install before they do anything else, which is what the record
+  format has always asked of every command that writes and nothing had done yet.
 - Work on a module now starts by branching `feat/<module>-<title>` —
   `feat/M1-the-model` for the next one — with every step in that module
   committed there and the branch

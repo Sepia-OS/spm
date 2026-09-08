@@ -15,6 +15,13 @@ tempfile = "3.27.0"
 thiserror = "2.0.20"
 ureq = { version = "3.4.1", default-features = false, features = ["rustls", "rustls-webpki-roots"] }
 
+# How much room is left on the card. There is no such thing in `std`, and the
+# alternative is `statvfs` through `libc`, which would be this crate's only
+# `unsafe`. `rustix` is already in the tree - `tempfile` pulls it in - so
+# enabling one more of its features costs nothing that is not already paid for.
+[target.'cfg(unix)'.dependencies]
+rustix = { version = "1.1.4", features = ["fs"] }
+
 # Configured here rather than on the CI command line, so that a build in a
 # worktree enforces exactly what CI does. A lint that only fires in CI is
 # discovered at the worst possible moment.

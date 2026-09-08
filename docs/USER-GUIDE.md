@@ -82,33 +82,44 @@ left you with is incomplete, and a script should be able to notice that.
 
 ```console
 # spm install helix
-The following will be installed:
-  llvm-runtime  23.1.0   (dependency)
+Installed:
+  llvm-runtime  23.1.0     (dependency)
   helix         25.07.1
 Download: 15.4 MiB.
-Proceed? [Y/n]
 ```
 
 Dependencies are worked out first and installed with the package. `spm`
 remembers that `llvm-runtime` came in as a dependency rather than because you
-asked for it, which is what lets it clean up after itself later.
+asked for it, which is what lets it clean up after itself later. A dependency
+you already have at a new enough version is left exactly where it is.
+
+`install` does not stop to ask. It works the whole set out before it fetches
+anything — so a package that cannot be resolved, a file that is already spoken
+for, or a card without the room fails before the first byte is downloaded — and
+`--dry-run` is how you look first:
+
+```console
+# spm install helix --dry-run
+The following will be installed:
+  llvm-runtime  23.1.0     (dependency)
+  helix         25.07.1
+Download: 15.4 MiB.
+Nothing was changed.
+```
 
 Before anything is unpacked, each download is checked twice: the package itself
 against the checksum the index carries for it, and then the payload inside it
 against the checksum its own metadata carries. A package that fails either
 check is not opened and not installed.
 
-To see what would happen without doing it:
-
-```console
-# spm install helix --dry-run
-```
-
 To install a particular version rather than the newest:
 
 ```console
 # spm install helix --version 25.01.1
 ```
+
+That is also how a package is put back to an older version. Installing a
+version you already have does nothing and says so.
 
 ### When two sources offer the same package
 
