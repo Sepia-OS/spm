@@ -10,6 +10,24 @@ once it has something to version.
 
 ### Added
 
+- `spm` cross-builds for a device:
+  `cargo build --release --locked --target aarch64-unknown-linux-musl` produces
+  a **static** `aarch64` binary that needs no interpreter and no shared library
+  at all. That is not a preference: a card built `WITH_LLVM=0` carries no
+  `libgcc_s`, so a binary that needed one would install perfectly and then
+  refuse to start. What is shipped instead asks the card for nothing.
+- A [`.cargo/config.toml`](.cargo/config.toml) that makes the cross-build one
+  command rather than a container. It points rustc's link step and `ring`'s
+  C-and-assembly compilation at the same musl-targeting toolchain the sibling
+  repositories already download, so no `cross`, no Docker, and no C compiler of
+  its own is needed for the target. The names in it are defaults and the
+  environment still wins, because the two vendors that publish such a toolchain
+  prefix it differently. A host build is untouched by any of it.
+- How to build, in [README.md](README.md): the host commands, what has to be
+  installed to cross-build, the `readelf` pair that is the acceptance test, and
+  the reminder that a cross-build still needs a *host* C compiler for build
+  scripts and proc macros — the trap that broke `Sepia-OS/grit`'s first CI run.
+
 - `spm upgrade`, which moves installed packages onto the newest versions the
   local indexes offer — so it finds nothing an `spm update` did not, which is
   what makes what it will do the same as what `--dry-run` said it would. A

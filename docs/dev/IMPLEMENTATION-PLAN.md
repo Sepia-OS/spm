@@ -1234,7 +1234,7 @@ then named a package that was not. Those are opposite things, and it now says
 
 ## M10 — Shipping
 
-### Step 37 — Cross-build
+### Step 37 — Cross-build ✅
 
 **Goal.** An `aarch64-unknown-linux-musl` binary.
 **Files.** `.cargo/config.toml`, `README.md`.
@@ -1245,6 +1245,43 @@ repositories already use. A build script needs a *host* compiler too — the tra
 that broke `Sepia-OS/grit`'s first CI run.
 **Done when.** `readelf -l` shows no interpreter and `readelf -d` no
 `NEEDED` — the same assertion `grit-check` makes.
+**Done.** `cargo build --release --locked --target aarch64-unknown-linux-musl`
+produces a 4.6 MiB `EXEC` for AArch64 with no `INTERP` segment and zero
+`NEEDED` entries, from a `.cargo/config.toml` of two tables and no container.
+
+**Both halves of the toolchain question turned out to be the same answer.**
+rustc needs a C compiler to drive the link and cannot use the host's, and
+`ring` needs one that compiles *for* the target; pointing
+`CARGO_TARGET_..._LINKER`, `CC_<target>` and `AR_<target>` at the one
+musl-targeting toolchain the family already downloads settles both. Verified
+rather than assumed: `ring`'s objects in the target directory are
+`ELF 64-bit ... ARM aarch64`, and its build log names
+`aarch64-unknown-linux-musl-gcc`, so the `CC_` entry is load-bearing and not
+decoration.
+
+**The names are defaults, not requirements**, which is why they are in `[env]`
+rather than baked in. No single vendor publishes a musl-targeting `aarch64`
+toolchain for both hosts — messense is macOS-hosted and spells the triple out
+in full, bootlin is Linux-hosted and prefixes `aarch64-linux-` — and cargo's
+`[env]` yields to a variable that is already set, so the other vendor is three
+environment variables rather than a patch. Step 39 will need exactly that.
+
+**Nothing here reaches a host build.** A `[target.<triple>]` table applies only
+when that triple is asked for, and `CC_<target>`/`AR_<target>` are read only by
+cc-rs when compiling for it. `cargo build`, `cargo clippy --all-targets` and
+the full suite behave exactly as they did before the file existed, which was
+checked rather than reasoned about — the alternative, a `[build] target = ...`
+line, would have quietly made every `cargo test` a cross-build that could not
+run.
+
+**The failure mode is already legible**, so it wanted no help: with no
+toolchain on `PATH` the build stops at ``error: linker
+`aarch64-unknown-linux-musl-gcc` not found``, which names the missing thing and
+the file that asked for it.
+
+**What this does not prove** is that the binary runs. It is an assertion about
+an ELF header made by a `readelf` that never executed a single instruction of
+it — which is Step 38, and why Step 38 exists.
 
 ### Step 38 — Run the tests on the target
 

@@ -16,12 +16,13 @@ in use.
 
 ## Status
 
-**Early.** The specification is written and the implementation has not started.
-The documents below describe the behaviour `spm` is being built to, not
-behaviour it has; [the implementation plan](docs/dev/IMPLEMENTATION-PLAN.md) is
-the honest account of how much exists.
+**Early.** Every command the specification describes is implemented and
+tested, and the binary cross-builds for a device. What is left is shipping it:
+[the implementation plan](docs/dev/IMPLEMENTATION-PLAN.md) is the honest
+account of how much exists, step by step.
 
-Nothing in this repository is ready to install on a device yet.
+There is no release yet, so nothing reaches a device except by being built from
+this repository.
 
 ## Documentation
 
@@ -49,6 +50,80 @@ cutting a release. Nobody maintains a list.
 A device can be configured with more than one source, and everything it
 installs is checked against a checksum the index published before a single file
 is written.
+
+## Building
+
+`spm` is an ordinary Rust crate, so building it for the machine you are sitting
+at is the ordinary command:
+
+```sh
+cargo build              # a binary for this machine
+cargo test               # the suite, which touches neither the network nor /
+```
+
+A Rust toolchain and nothing else — no system OpenSSL, no `zlib`, no
+`pkg-config`. That is a rule rather than luck: a dependency that cannot
+cross-compile statically to the device does not go in, which is why the TLS is
+`rustls` and the decompression is `flate2`'s Rust backend. The floor is Rust
+1.98.1, because that is the version `Sepia-OS/rust-toolchain` puts on a card and
+a package manager its own operating system cannot rebuild would be an odd
+thing.
+
+### Cross-building for a device
+
+A device is `aarch64` running musl, so that is what a release is built for:
+
+```sh
+cargo build --release --locked --target aarch64-unknown-linux-musl
+```
+
+Two things have to be in place first:
+
+- **The target**, which is one command: `rustup target add aarch64-unknown-linux-musl`.
+- **A musl-targeting `aarch64` cross toolchain on `PATH`.** rustc drives the
+  link through a C compiler, and the host's cannot produce aarch64 ELF; `ring`,
+  which arrives under `rustls`, additionally compiles C and assembly *for the
+  target*. Both jobs go to the same toolchain, named in
+  [`.cargo/config.toml`](.cargo/config.toml). It is the one the sibling
+  repositories already download: [messense](https://github.com/messense/homebrew-macos-cross-toolchains)
+  on a macOS host, [bootlin](https://toolchains.bootlin.com/) on Linux. Without
+  it the build stops at ``linker `aarch64-unknown-linux-musl-gcc` not found``,
+  which is the whole diagnosis.
+
+A **host** C compiler is needed as well, and it is easy to forget why: build
+scripts and proc-macro crates are compiled and run on the build machine, and
+rustc links those with plain `cc`. A container carrying only the cross
+toolchain fails partway through a dependency with ``linker `cc` not found``.
+That is what broke [grit](https://github.com/Sepia-OS/grit)'s first CI run.
+
+The two vendors prefix their toolchains differently — messense spells the
+triple out in full, bootlin calls it `aarch64-linux-` — so the names in
+`.cargo/config.toml` are defaults rather than requirements. The environment
+overrides them:
+
+```sh
+CARGO_TARGET_AARCH64_UNKNOWN_LINUX_MUSL_LINKER=aarch64-linux-gcc \
+CC_aarch64_unknown_linux_musl=aarch64-linux-gcc \
+AR_aarch64_unknown_linux_musl=aarch64-linux-ar \
+  cargo build --release --locked --target aarch64-unknown-linux-musl
+```
+
+### What comes out
+
+A **static** binary, because `aarch64-unknown-linux-musl` links `crt-static`
+by default and that default is wanted here. A card built `WITH_LLVM=0` carries
+no `libgcc_s`, so a binary that needed one would install perfectly and then
+refuse to start. This one asks the card for nothing at all, which is a stronger
+claim than any list of libraries that happen to be present today:
+
+```sh
+BIN=target/aarch64-unknown-linux-musl/release/spm
+aarch64-unknown-linux-musl-readelf -l $BIN | grep INTERP   # nothing: no interpreter to find
+aarch64-unknown-linux-musl-readelf -d $BIN | grep NEEDED   # nothing: no shared library to load
+```
+
+Both print nothing, and that is the acceptance test — the same assertion
+`grit-check` makes about the `git` that ships beside it.
 
 ## Part of SepiaOS
 

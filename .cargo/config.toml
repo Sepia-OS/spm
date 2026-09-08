@@ -1,0 +1,48 @@
+# Cross-building spm for a device.
+#
+#     cargo build --release --locked --target aarch64-unknown-linux-musl
+#
+# is the whole command. Everything that command needs and cannot work out for
+# itself is in this file.
+#
+# None of it touches a host build. The [target] table is consulted only when
+# that triple is asked for, and the two variables below are read only by cc-rs
+# when it compiles *for* that triple, so `cargo test` on a workstation behaves
+# exactly as it did before this file existed.
+#
+# The target is static: `aarch64-unknown-linux-musl` links `crt-static` by
+# default, and that is the point rather than an accident of the default. A card
+# built `WITH_LLVM=0` has no `libgcc_s` on it, so a binary that needed one
+# would install cleanly and then fail to start. Nothing is asked of the card at
+# all, which is a stronger claim than a list of libraries that happen to be
+# there today.
+
+# rustc drives the link through a C compiler, and the host's cannot produce
+# aarch64 ELF - a macOS `cc` least of all, where it is the Apple linker behind
+# clang. Rust projects usually reach for `cross`, which is a Docker container
+# per build; SepiaOS already downloads a musl-targeting aarch64 toolchain for
+# every other repository in the family, so spm uses that one and needs no
+# container.
+#
+# Overridable, like everything below, by the environment cargo derives from the
+# key - CARGO_TARGET_AARCH64_UNKNOWN_LINUX_MUSL_LINKER - because the vendors
+# name their toolchains differently. See "Cross-building" in README.md.
+[target.aarch64-unknown-linux-musl]
+linker = "aarch64-unknown-linux-musl-gcc"
+
+# `ring`, which comes in under `rustls`, compiles C and assembly *for the
+# target* through cc-rs. Left alone, cc-rs picks the host compiler and passes
+# it a `--target` flag. That happens to work on macOS, where `cc` is clang and
+# clang is a cross-compiler by nature, and it fails in a Debian container,
+# where `cc` is an x86_64-only gcc or is not installed at all. Pointing cc-rs
+# at the toolchain that is already doing the linking makes the build the same
+# on every host, and means a CI container needs no C compiler of its own for
+# the target.
+#
+# These are set rather than forced, so `CC_aarch64_unknown_linux_musl=... cargo
+# build` still wins: cargo's [env] yields to a variable that is already set.
+# The default spelling is the one a macOS host gets from messense; bootlin's
+# Linux-hosted build of the same thing is prefixed `aarch64-linux-`.
+[env]
+CC_aarch64_unknown_linux_musl = "aarch64-unknown-linux-musl-gcc"
+AR_aarch64_unknown_linux_musl = "aarch64-unknown-linux-musl-ar"
