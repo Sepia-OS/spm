@@ -263,7 +263,20 @@ pub fn install(
 /// [`Error::NotEnoughSpace`], naming what is needed and what there is.
 fn enough_room(store: &Store, download: u64) -> Result<()> {
     let root = store.root();
-    let free = space::available(root)?;
+    room_for(download, space::available(root)?, root)
+}
+
+/// Whether that much may be downloaded with that much free, and the refusal.
+///
+/// Split from the reading rather than folded into it, because the reading is
+/// the one part of this that cannot be pinned down: the free space of a real
+/// filesystem moves under a test while it runs. The decision is what is worth
+/// asserting, and it is worth asserting exactly.
+///
+/// # Errors
+///
+/// [`Error::NotEnoughSpace`], naming what is needed and what there is.
+fn room_for(download: u64, free: u64, root: &Path) -> Result<()> {
     let needed = download.saturating_mul(ROOM_FOR);
 
     if needed > free {
@@ -618,44 +631,46 @@ fn hex(bytes: &[u8]) -> String {
 mod tests {
     use super::*;
 
+    /// A megabyte, so the numbers below read as sizes rather than as counts.
+    const MIB: u64 = 1 << 20;
+
     #[test]
     fn an_install_asks_for_twice_what_it_downloads() {
-        // A package is on the card twice while it installs.
-        let directory = tempfile::tempdir().unwrap();
-        let store = Store::at(directory.path());
-        let free = space::available(directory.path()).unwrap();
+        // A package is on the card twice while it installs. Against fixed
+        // numbers rather than a real filesystem: the free space of one moves
+        // while a test runs, and a test whose answer depends on what another
+        // test happened to write is not testing this.
+        let root = Path::new("/");
 
-        // Half of what is free is fine; two thirds of it is not, because it
-        // wants twice that.
-        enough_room(&store, free / 2).unwrap();
-
-        match enough_room(&store, (free / 3).saturating_mul(2)) {
-            Err(Error::NotEnoughSpace {
-                path,
-                needed,
-                free: reported,
-            }) => {
-                assert_eq!(path, directory.path());
-                assert!(!needed.is_empty() && !reported.is_empty());
-            }
-            other => panic!("expected NotEnoughSpace, got {other:?}"),
-        }
+        // Exactly twice fits.
+        room_for(50 * MIB, 100 * MIB, root).unwrap();
+        // A byte more does not.
+        assert!(room_for(50 * MIB + 1, 100 * MIB, root).is_err());
+        // And once is never enough on its own.
+        assert!(room_for(100 * MIB, 100 * MIB, root).is_err());
     }
 
     #[test]
     fn the_refusal_says_what_is_needed_and_what_there_is() {
-        let directory = tempfile::tempdir().unwrap();
-        let store = Store::at(directory.path());
-        let free = space::available(directory.path()).unwrap();
+        let root = Path::new("/");
+        let error = room_for(50 * MIB, 12 * MIB, root).unwrap_err();
 
-        let message = enough_room(&store, free).unwrap_err().to_string();
+        match &error {
+            Error::NotEnoughSpace { path, .. } => assert_eq!(path, root),
+            other => panic!("expected NotEnoughSpace, got {other:?}"),
+        }
 
-        assert!(message.contains(&ui::size(free)), "{message}");
-        assert!(
-            message.contains(&ui::size(free.saturating_mul(2))),
-            "{message}"
-        );
+        let message = error.to_string();
+        assert!(message.contains("100.0 MiB"), "what is needed: {message}");
+        assert!(message.contains("12.0 MiB"), "what there is: {message}");
         assert!(message.contains("twice"), "{message}");
+    }
+
+    #[test]
+    fn asking_for_nothing_needs_nothing() {
+        // A set that is entirely already installed downloads nothing, and must
+        // not be refused by a card with nothing free either.
+        room_for(0, 0, Path::new("/")).unwrap();
     }
 
     #[test]

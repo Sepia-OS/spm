@@ -48,6 +48,9 @@ pub enum Command {
     /// Install a package and everything it needs
     Install(InstallArgs),
 
+    /// Remove a package, and anything that came in with it and is now unneeded
+    Remove(RemoveArgs),
+
     /// Search the indexes for a package
     Search(SearchArgs),
 
@@ -97,6 +100,18 @@ pub struct InstallArgs {
     pub version: Option<String>,
 
     /// Work out what would be installed and change nothing
+    #[arg(long)]
+    pub dry_run: bool,
+}
+
+/// `spm remove`.
+#[derive(Debug, Args)]
+pub struct RemoveArgs {
+    /// The package, as `<package>` or `<source>/<package>`
+    #[arg(value_name = "PACKAGE")]
+    pub package: String,
+
+    /// Work out what would be removed and change nothing
     #[arg(long)]
     pub dry_run: bool,
 }

@@ -319,6 +319,51 @@ fn note(step: &crate::ops::install::Step) -> String {
     }
 }
 
+/// Say what a removal took away, or what it would take away.
+///
+/// The package that was asked for first, then whatever went with it, marked so
+/// that a package somebody did not name is not mistaken for one they did.
+pub fn removed(outcome: &crate::ops::remove::Outcome) {
+    recovered(&outcome.rolled_back);
+
+    let removal = &outcome.removal;
+    println!(
+        "{}",
+        if outcome.changed {
+            "Removed:"
+        } else {
+            "The following will be removed:"
+        }
+    );
+
+    let width = removal
+        .packages
+        .iter()
+        .map(|going| going.name.as_str().len())
+        .max()
+        .unwrap_or(4);
+    for going in &removal.packages {
+        let line = format!(
+            "  {:<width$}  {:<10}{}",
+            going.name.as_str(),
+            going.version.to_string(),
+            if going.unneeded {
+                "(no longer needed)"
+            } else {
+                ""
+            },
+            width = width
+        );
+        println!("{}", line.trim_end());
+    }
+
+    let files = removal.files();
+    println!("{files} file{} removed.", if files == 1 { "" } else { "s" });
+    if !outcome.changed {
+        println!("Nothing was changed.");
+    }
+}
+
 /// Say what an unfinished install left behind and what became of it.
 pub fn recovered(names: &[crate::model::name::PackageName]) {
     for name in names {

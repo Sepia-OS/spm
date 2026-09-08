@@ -10,6 +10,24 @@ once it has something to version.
 
 ### Added
 
+- `spm remove`, which takes back exactly what was installed and nothing else.
+  A file another installed package also claims stays; a file no record claims
+  is never touched, because `spm` does not remove what it did not install; and
+  a directory goes only once the last thing in it has. A package something else
+  still needs is refused, and the packages that need it are named, so what
+  would have to go first is on the screen rather than left to be worked out.
+- Autoremove, which is the other half of `install` recording *why* a package is
+  on the device: anything that came in as a dependency and that nothing
+  remaining needs goes with what pulled it in, so removing the head of a chain
+  three deep takes all three. A package somebody asked for by name is never
+  taken automatically, however unreferenced it looks — which is what stops the
+  cascade at anything the user chose.
+- `spm remove --dry-run`, which works the set out, prints it, and takes
+  nothing.
+- An install that did not finish now leaves no trace at all: the rollback
+  removes the directories it emptied as well as the files it wrote. That was
+  left open when the journal was built, with the note that it belonged to
+  `remove` — it does, and both halves share it.
 - `spm install`, which puts a package and everything it needs on the device.
   Dependencies are worked out first and brought in at the **oldest** version
   that satisfies them, because a floor is a floor and taking the newest would
@@ -356,8 +374,8 @@ once it has something to version.
   a device can see. A source's scan reads it off a release listing without
   downloading anything, which is the property the index format is built around,
   so it costs a source nothing.
-- The user guide showed `spm install` asking `Proceed? [Y/n]`, which it does
-  not. Neither the architecture nor the design ever specified a prompt, and one
+- The user guide showed `spm install` and `spm remove` asking `Proceed? [Y/n]`,
+  which they do not. Neither the architecture nor the design ever specified a prompt, and one
   without a `--yes` would make `install` unusable from a script — including from
   the release workflow that will publish `spm` as a package. `--dry-run` is how
   to look before installing, and the guide now says so.

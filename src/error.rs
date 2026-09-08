@@ -97,6 +97,17 @@ pub enum Error {
         needle: String,
     },
 
+    /// Nothing on the device goes by that name.
+    ///
+    /// Distinct from [`Error::PackageNotFound`], whose advice is to update or
+    /// search — a package that exists everywhere except on this device is not
+    /// a package anybody needs to go looking for.
+    #[error("'{name}' is not installed - 'spm list --installed' shows what is")]
+    NotInstalled {
+        /// The name that was asked for, as it was typed.
+        name: String,
+    },
+
     /// No source is configured under this name.
     #[error("no source named '{name}' - 'spm list-sources' shows the configured ones")]
     SourceNotFound {
@@ -294,6 +305,7 @@ impl Error {
             | Error::NothingMatched { .. }
             | Error::SourceNotFound { .. }
             | Error::VersionNotFound { .. }
+            | Error::NotInstalled { .. }
             | Error::TargetNotAvailable { .. }
             // The version that would satisfy it is the thing that is not there.
             | Error::DependencyNotSatisfiable { .. } => 3,
@@ -368,6 +380,12 @@ mod tests {
             (
                 Error::NothingMatched {
                     needle: "hel".to_owned(),
+                },
+                3,
+            ),
+            (
+                Error::NotInstalled {
+                    name: "helix".to_owned(),
                 },
                 3,
             ),
