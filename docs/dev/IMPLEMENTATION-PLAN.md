@@ -857,9 +857,9 @@ descending as `25.07.1, 4.4.1, 23.1.0`, which is a string sort. It is
 
 ---
 
-## M7 — `install`
+## M7 — `install` ✅
 
-### Step 27 — Dependency resolution
+### Step 27 — Dependency resolution ✅
 
 **Goal.** A package name becomes the full set to install.
 **Files.** `src/ops/resolve.rs`.
@@ -869,8 +869,39 @@ and is not older than what is installed. Skip a dependency already satisfied.
 Detect cycles with the visited set and report rather than loop.
 **Done when.** Tests for: a chain three deep; a diamond resolved once; a cycle
 reported; an unsatisfiable dependency named with what wanted it.
+**Done.** `with_dependencies`, and `IndexPackage::lowest_from` under it, with
+all four cases tested against packages `create` built.
 
-### Step 28 — The plan and `--dry-run`
+**A circle and a diamond are the same thing seen from the package that closes
+them**, and telling them apart is the whole of the cycle detection. Breadth-first
+with a visited set never loops, so "reported rather than followed" needs
+something more than the visited set: each package records what pulled it in, and
+reaching one that is already in the set is a circle exactly when it is an
+*ancestor* of where we are. Anything else is a diamond, and a diamond is
+resolved once. The error names the circle in the order somebody has to read it —
+`snake -> tail -> snake`.
+
+Three things the step's list did not settle:
+
+- **A dependency is a bare name, and a name only identifies a package within a
+  source.** It is resolved against the source of the package that named it
+  first, and only then against everything configured. Pulling a package out of
+  an unrelated source because its name matched is how a device ends up with
+  something nobody chose.
+- **A package the user once asked for stays theirs.** One that is already
+  installed explicitly and now also arrives as a dependency keeps
+  `reason: explicit`, or autoremove would eventually take away something they
+  chose by name.
+- **A diamond whose two sides disagree about how new the shared package has to
+  be** raises the floor and works out what that version needs in turn. Floors
+  only ever rise, so it terminates.
+
+"Not older than what is installed" turns out to be a guard rather than a rule
+with teeth: a dependency the device already satisfies is skipped before the
+floor is ever used. It is implemented anyway, because the rule is easier to keep
+than to re-derive.
+
+### Step 28 — The plan and `--dry-run` ✅
 
 **Goal.** Say what would happen before anything happens.
 **Files.** `src/ops/install.rs`, `src/ui.rs`.
@@ -878,8 +909,33 @@ reported; an unsatisfiable dependency named with what wanted it.
 here and touches nothing — assert *that* in the test, not just the output.
 **Done when.** A dry run over a fixture source leaves the prefix
 byte-for-byte unchanged.
+**Done.** `plan`, `Change`, and `ui::installed`. The done-when is tested as
+stated: the whole prefix is walked into a map of path to contents before and
+after, and the two are compared. The transport is asked for nothing either — a
+dry run that fetched an index would already have told somebody what this device
+was about to do.
 
-### Step 29 — Verification
+**The index had to grow a `bytes` field**, and that is the one format change in
+this milestone. Both things that need a package's size happen *before* it is
+fetched — the download total a plan prints, and the check that the card has room
+— and the size was in neither the index nor anywhere else the client can see. A
+scan reads it off a release listing without downloading anything, which is the
+property the whole index format is built around, so it costs the source nothing.
+`docs/dev/DESIGN.md` and `docs/dev/ARCHITECTURE.md` are updated with it.
+
+**`install` does not stop to ask.** The user guide showed a `Proceed? [Y/n]`
+prompt that neither the architecture nor this document ever specified — the
+architecture lists exactly two options for `install`, and neither is a `--yes`.
+A prompt without one would make `spm install` unusable from a script, and Step
+41 has the release workflow installing `spm` with it. The guide has been
+corrected to what the command prints, as it was in Step 21 over relative dates.
+
+**Downgrades are settled, and are no longer a deferred question.**
+`install --version` naming an older version than the installed one replaces it
+and the plan says `(downgrade from …)`. Any behaviour settles that question, and
+refusing would have meant a device that cannot be put back.
+
+### Step 29 — Verification ✅
 
 **Goal.** Both digests, at the right moments.
 **Files.** `src/ops/install.rs`.
@@ -889,8 +945,24 @@ all**; then `data.tar.gz` against the `sha256` inside the archive's own
 them apart is not testing this.
 **Done when.** A fixture with a corrupted outer archive fails before it is
 opened, and one with a swapped payload fails at the second check. Both exit 6.
+**Done.** Both, and the two are told apart by what the failure names.
 
-### Step 30 — Unpacking
+The first test serves something that **is not an archive at all** rather than a
+corrupted one: anything that had opened it would fail to parse it, so a
+`Verification` failure rather than a `Parse` failure is what proves the digest
+was checked first. The second needed a package `create` will not build — a
+well-formed archive holding one package's payload beside another's metadata —
+so `tests/support` gained `swap_payload`, and the index carries that archive's
+own digest so the first check passes and only the second can fail.
+
+**The payload is checked against the metadata packed beside it, not against the
+index's `payload_sha256`.** They hold the same value, and checking the index's
+copy would be checking the index against itself: the outer digest already
+establishes that the archive is exactly what the index described. What is left
+to establish is that the metadata inside describes the payload inside, and only
+the packed copy says that.
+
+### Step 30 — Unpacking ✅
 
 **Goal.** Extraction, with every rule from DESIGN.md enforced.
 **Files.** `src/unpack.rs`.
@@ -906,8 +978,42 @@ absolute path, `etc/` outside `usr/`, a device node, a hard link, a symlink to
 `/etc` followed by a write through it — each rejected with its own error, and
 a test asserting a file unpacked from an archive recording uid 1001 is owned by
 root.
+**Done.** `inspect` and `extract` over one checked walk, with 18 tests: every
+refusal on that list, a `.` component, a name that is not valid UTF-8, and the
+good package that has to keep working.
 
-### Step 31 — Conflicts
+**The hostile archives could not be built with the `tar` crate's own API**,
+which refuses `..`, an absolute path and a `.` component when it writes a name —
+so the test builder writes those names straight into the header. An archive this
+tool could not produce is exactly what these rules are for.
+
+Five things the step's list did not say:
+
+- **A path has to be valid UTF-8.** Not a safety rule but a record one, and it
+  is the consequence Step 7 wrote down: a record is JSON, so a file whose name
+  cannot be written into one could never be removed again.
+- **"Nothing is followed" is about the directories too.** `create_dir_all` walks
+  happily through a symlink standing in for one of them, so the directories are
+  made one component at a time and a link among them is refused. A link at the
+  destination itself is unlinked rather than written through — `remove_file` on
+  a symlink removes the link — and the file is then created with `create_new`.
+- **Ownership is tested by comparison, not by asserting root.** The tests do not
+  run as root, so the claim is that the archive did not get a say: a file
+  unpacked from a header recording uid 1001 has the same owner as one the test
+  wrote itself.
+- **Set-user-id and set-group-id do not come from the archive**, though the rest
+  of the permissions do. `create` normalises every mode to 644 or 755 and cannot
+  produce one, so a package carrying one did not come from this tool.
+- **A directory entry is forced traversable by its owner.** A package asking for
+  mode 000 on a directory is asking for one the rest of it cannot be unpacked
+  into.
+
+**The payload is streamed rather than staged**, which is why `inspect` and
+`extract` take something to read rather than a path: writing `data.tar.gz` out
+before unpacking it would put the package on the card a third time, next to the
+archive and the tree it unpacks to.
+
+### Step 31 — Conflicts ✅
 
 **Goal.** Refuse rather than overwrite.
 **Files.** `src/ops/install.rs`.
@@ -918,8 +1024,14 @@ adopting it would mean `remove` later deleting something `spm` never installed.
 **Done when.** Two fixture packages that share a file fail on the second, and
 installing over a file the image put there fails. Both exit 7, before any file
 is written.
+**Done.** `unclaimed`, and both cases tested — including that the refused
+package left nothing behind, not even the files it alone owns, and that the file
+already there still holds what it held.
 
-### Step 32 — Commit and recovery
+**A package's own files are neither kind of conflict.** That is what an upgrade
+is, and without the exception no package could ever be replaced by a newer one.
+
+### Step 32 — Commit and recovery ✅
 
 **Goal.** An install that cannot leave a half-installed device.
 **Files.** `src/ops/install.rs`, `src/store/db.rs`.
@@ -928,8 +1040,36 @@ is written.
 **Done when.** A test that kills the process between the journal and the rename
 leaves a `.partial`; the next command removes those files and the record; the
 prefix matches its pre-install state.
+**Done.** The journal, and the recovery in front of every command that writes.
 
-### Step 33 — Disk space
+**Nothing is killed, and nothing needs to be.** A package whose files straddle
+an obstruction gives a genuine interrupted install: the device carries a
+symbolic link where one of its directories has to go, so the first file is
+written and the second refuses. What is left is exactly what a power cut leaves
+— a journal on disk and a file already on the card — and the next command,
+which is an ordinary `install` of something else, takes it back before doing
+what it was asked.
+
+**`recover` had to learn to leave committed records alone**, and this is the
+part that would have been a bug. An interrupted *upgrade* has a journal naming
+the files of the version still installed; taking those back would leave a
+package whose record says it is whole and whose files are gone. A file some
+committed record claims is now skipped — leaving one holding the newer version's
+contents, which the next install puts right, rather than deleting one the device
+is still using.
+
+**An upgrade takes away what the old version no longer ships**, after the rename
+rather than before it. Without that the file stays on the card owned by nobody,
+where `remove` would never reach it and the next install would refuse to
+overwrite it. A crash between the two leaves a stale file, which is recoverable;
+the other order leaves a missing one, which is not.
+
+Recovery runs in `main` for `update`, `add-source` and `remove-source`, which
+Step 12 asked for and nothing had done yet, and inside `install` itself —
+because a caller of the library does not come through `main` and has to be as
+safe as one that does.
+
+### Step 33 — Disk space ✅
 
 **Goal.** Refuse before filling the root filesystem.
 **Files.** `src/ops/install.rs`.
@@ -939,8 +1079,22 @@ not fit. On a 2 GiB card with Rust and Helix already on it, this is not
 hypothetical.
 **Done when.** A test with a constrained prefix refuses with a message naming
 what is needed and what is free.
+**Done.** `store::space::available` and `enough_room`, refused before a byte is
+fetched — which the test asserts by looking at what the transport was asked for.
 
----
+**The prefix is not constrained; the package is inflated.** A small filesystem
+cannot be made in a test without root or platform-specific tooling, and it does
+not have to be: the index is where a device learns how big a download is, so an
+index claiming a package no card could hold exercises the real check against the
+real free space of the real filesystem. It also shows what a wrong index costs —
+a refusal, and not a full card.
+
+**There is no free-space call in `std`.** The alternative to a dependency was
+`statvfs` through `libc`, which would have been this crate's only `unsafe`
+block. `rustix` wraps the same call safely and `tempfile` already pulls it in,
+so enabling one more of its features adds nothing to the tree and the crate
+still contains no `unsafe` at all — the same conclusion Step 10 reached about
+`flock`, by a different route.
 
 ## M8 — `remove`
 
@@ -1056,8 +1210,6 @@ None of them blocks a first release.
   not a device from a source that has been taken over. Signing, with a key
   pinned per source in `sources.json`, is the next layer and wants designing
   before it is built.
-- **Downgrades.** `install --version` naming an older version than the one
-  installed is undecided: downgrade, error, or no-op.
 - **A `verify` command** to re-check installed files against their records. The
   data is already there; the command is not specified.
 - **Addressing a source by name** in `add-source`, `remove-source` and

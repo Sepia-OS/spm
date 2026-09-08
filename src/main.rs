@@ -56,6 +56,18 @@ fn locked(store: &spm::store::Store) -> Result<spm::store::lock::Lock> {
     spm::store::lock::Lock::wait(&path)
 }
 
+/// Take back any install that did not finish, before anything else runs.
+///
+/// Every command that writes does this. `install` does it itself, because a
+/// caller of the library does not come through here and must be as safe as one
+/// that does; the rest have no reason to know about journals at all, so it
+/// happens here for them.
+fn recover(store: &spm::store::Store) -> Result<()> {
+    let undone = spm::store::db::Database::new(store).recover()?;
+    ui::recovered(&undone);
+    Ok(())
+}
+
 /// Read a package reference from the command line.
 fn package_ref(text: &str) -> Result<spm::model::name::PackageRef> {
     spm::model::name::PackageRef::parse(text)
@@ -85,11 +97,36 @@ fn run() -> Result<()> {
                 None => spm::ops::update::Which::All,
             };
             let _lock = locked(&store)?;
+            recover(&store)?;
             let transport = spm::net::https::Https::new();
             let report = ops::update::update(&store, &transport, &which)?;
             ui::updated(&report);
             // Printed first, then the failure: a script should see both.
             report.outcome()
+        }
+        Command::Install(args) => {
+            let target = spm::model::name::Target::current();
+            let wanted = args.version.as_deref().map(version).transpose()?;
+            let reference = package_ref(&args.package)?;
+            // A dry run changes nothing, so it takes no lock and waits for
+            // nobody: "what would this do" is a question a device can answer
+            // while it is busy doing something else.
+            let _lock = if args.dry_run {
+                None
+            } else {
+                Some(locked(&store)?)
+            };
+            let transport = spm::net::https::Https::new();
+            let outcome = ops::install::install(
+                &store,
+                &transport,
+                &reference,
+                &target,
+                wanted.as_ref(),
+                args.dry_run,
+            )?;
+            ui::installed(&outcome);
+            Ok(())
         }
         Command::Search(args) => {
             let target = spm::model::name::Target::current();
@@ -140,6 +177,7 @@ fn run() -> Result<()> {
         }
         Command::AddSource(args) => {
             let _lock = locked(&store)?;
+            recover(&store)?;
             let transport = spm::net::https::Https::new();
             let added = ops::source::add_source(
                 &store,
@@ -153,6 +191,7 @@ fn run() -> Result<()> {
         }
         Command::RemoveSource(args) => {
             let _lock = locked(&store)?;
+            recover(&store)?;
             ui::removed_source(&ops::source::remove_source(&store, &args.url)?);
             Ok(())
         }

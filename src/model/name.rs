@@ -277,6 +277,16 @@ impl PackageRef {
         &self.package
     }
 
+    /// A reference naming no source, which is what a dependency is: a bare
+    /// name, to be resolved against whatever the device has configured.
+    #[must_use]
+    pub fn of(package: PackageName) -> Self {
+        PackageRef {
+            source: None,
+            package,
+        }
+    }
+
     /// The reference with a source attached, as `search` and `list` print a
     /// package that more than one source offers.
     #[must_use]

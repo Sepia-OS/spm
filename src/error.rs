@@ -155,6 +155,63 @@ pub enum Error {
         reading: String,
     },
 
+    /// A package needs a version of something that nothing offers.
+    ///
+    /// Distinct from [`Error::PackageNotFound`], which is the dependency not
+    /// existing at all, and from [`Error::TargetNotAvailable`], which is it
+    /// existing for other machines. This one is "it is here, and not new
+    /// enough", and the fix is a different one again.
+    #[error(
+        "'{package}' needs '{dependency}' at version {needed} or newer, and the newest one offered for this machine is {available} - 'spm update' fetches whatever the sources have published since the last time"
+    )]
+    DependencyNotSatisfiable {
+        /// The package that wants it.
+        package: String,
+        /// The package it wants.
+        dependency: String,
+        /// The oldest version that would do.
+        needed: String,
+        /// The newest version there actually is.
+        available: String,
+    },
+
+    /// Packages that need each other, so no set containing them is complete.
+    #[error(
+        "these packages need each other in a circle: {} - each of them is waiting for the next, so the set can never be completed; it is a mistake in the packages themselves, and whoever publishes them has to break the circle", .chain.join(" -> ")
+    )]
+    DependencyCycle {
+        /// The circle, from the package that closes it back round to itself.
+        chain: Vec<String>,
+    },
+
+    /// A package holds something that will not be unpacked into `/`.
+    ///
+    /// Its own variant rather than an [`Error::Io`] because nothing went
+    /// wrong with the device: the package asked for something extraction does
+    /// not do, and the refusal is the whole point.
+    #[error(
+        "refusing to unpack {path}: {reason}; nothing from this package has been written, and it is not one this tool would have built"
+    )]
+    UnsafeEntry {
+        /// The path inside the package, exactly as the package spells it.
+        path: PathBuf,
+        /// Which rule it breaks.
+        reason: String,
+    },
+
+    /// The card would fill up.
+    #[error(
+        "there is not enough room on {path}: {needed} is needed and {free} is free - a package is on the card twice while it installs, the download and the unpacked files, so an install needs about twice what it downloads; 'rm -rf /var/cache/spm/*' is safe at any time"
+    )]
+    NotEnoughSpace {
+        /// The filesystem that would fill up.
+        path: PathBuf,
+        /// How much is needed, ready to read.
+        needed: String,
+        /// How much there is, ready to read.
+        free: String,
+    },
+
     /// Something did not match the digest that was published for it.
     #[error(
         "{what} does not match its checksum - expected {expected}, found {found}; the download was corrupted, or the source published something that does not match its own index"
@@ -224,16 +281,28 @@ impl Error {
     #[must_use]
     pub fn exit_code(&self) -> u8 {
         match self {
-            Error::Io { .. } | Error::Parse { .. } | Error::Locked { .. } => 1,
+            // A circle in the dependencies and a full card are neither of them
+            // a thing that is missing, ambiguous, or in conflict on disk, and
+            // neither has a code of its own in the documented table.
+            Error::Io { .. }
+            | Error::Parse { .. }
+            | Error::Locked { .. }
+            | Error::DependencyCycle { .. }
+            | Error::NotEnoughSpace { .. } => 1,
             Error::Usage(_) | Error::NotPackageable { .. } => 2,
             Error::PackageNotFound { .. }
             | Error::NothingMatched { .. }
             | Error::SourceNotFound { .. }
             | Error::VersionNotFound { .. }
-            | Error::TargetNotAvailable { .. } => 3,
+            | Error::TargetNotAvailable { .. }
+            // The version that would satisfy it is the thing that is not there.
+            | Error::DependencyNotSatisfiable { .. } => 3,
             Error::Ambiguous { .. } => 4,
             Error::Network { .. } | Error::ClockBehind { .. } => 5,
-            Error::Verification { .. } => 6,
+            // A package carrying `../../etc/passwd` fails a check about itself,
+            // which is the same class as failing its digest - and the same
+            // class of thing that may mean something other than bad luck.
+            Error::Verification { .. } | Error::UnsafeEntry { .. } => 6,
             Error::FileConflict { .. }
             | Error::FileUnowned { .. }
             | Error::HasDependents { .. } => 7,
@@ -316,6 +385,40 @@ mod tests {
                     available: "x86_64-musl".to_owned(),
                 },
                 3,
+            ),
+            (
+                Error::DependencyNotSatisfiable {
+                    package: "helix".to_owned(),
+                    dependency: "llvm-runtime".to_owned(),
+                    needed: "23.1.0".to_owned(),
+                    available: "21.0.0".to_owned(),
+                },
+                3,
+            ),
+            (
+                Error::DependencyCycle {
+                    chain: vec![
+                        "helix".to_owned(),
+                        "llvm-runtime".to_owned(),
+                        "helix".to_owned(),
+                    ],
+                },
+                1,
+            ),
+            (
+                Error::UnsafeEntry {
+                    path: PathBuf::from("../../etc/passwd"),
+                    reason: "a package may only write under usr/".to_owned(),
+                },
+                6,
+            ),
+            (
+                Error::NotEnoughSpace {
+                    path: PathBuf::from("/"),
+                    needed: "431.0 MiB".to_owned(),
+                    free: "12.4 MiB".to_owned(),
+                },
+                1,
             ),
             (
                 Error::Ambiguous {

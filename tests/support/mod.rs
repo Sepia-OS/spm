@@ -262,6 +262,44 @@ impl Built {
     }
 }
 
+/// Build a package out of one package's payload and another's metadata.
+///
+/// A well-formed archive describing something other than what it holds, which
+/// is the one thing the second digest check exists to catch and the one thing
+/// `create` will not produce. Gives back the package and its own digest, so an
+/// index can carry a checksum that matches the archive exactly — leaving the
+/// payload check as the only one that can fail.
+///
+/// # Panics
+///
+/// If either package cannot be read or the result cannot be written.
+pub fn swap_payload(payload_from: &Built, metadata_from: &Built, into: &Path) -> (PathBuf, String) {
+    let path = into.join("swapped.tar.gz");
+    let file = fs::File::create(&path).unwrap();
+    let encoder = flate2::write::GzEncoder::new(file, flate2::Compression::default());
+    let mut builder = tar::Builder::new(encoder);
+
+    for (name, bytes) in [
+        (PAYLOAD, payload_from.member(PAYLOAD)),
+        (METADATA, metadata_from.member(METADATA)),
+    ] {
+        let mut header = tar::Header::new_gnu();
+        header.set_entry_type(tar::EntryType::Regular);
+        header.set_size(bytes.len() as u64);
+        header.set_mode(0o644);
+        header.set_uid(0);
+        header.set_gid(0);
+        header.set_mtime(0);
+        builder
+            .append_data(&mut header, name, bytes.as_slice())
+            .unwrap();
+    }
+
+    builder.into_inner().unwrap().finish().unwrap();
+    let digest = digest(&fs::read(&path).unwrap());
+    (path, digest)
+}
+
 /// A digest, as `create` writes them.
 pub fn digest(bytes: &[u8]) -> String {
     let mut hasher = Sha256::new();
@@ -316,6 +354,9 @@ pub fn index_of(source: &str, entries: &[(&Built, String)]) -> String {
             version: metadata.version.clone(),
             target: metadata.target.clone(),
             url: url.clone(),
+            // The real size, so a plan's download total and the space check are
+            // about the package the test actually built.
+            bytes: built.bytes,
             sha256: Sha256::parse(&built.sha256).expect("create wrote a digest"),
             payload_sha256: metadata
                 .sha256

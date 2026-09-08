@@ -45,6 +45,9 @@ pub enum Command {
     /// Fetch the package indexes from the configured sources
     Update(UpdateArgs),
 
+    /// Install a package and everything it needs
+    Install(InstallArgs),
+
     /// Search the indexes for a package
     Search(SearchArgs),
 
@@ -80,6 +83,22 @@ pub struct UpdateArgs {
     /// Update only this source
     #[arg(long, value_name = "NAME")]
     pub source: Option<String>,
+}
+
+/// `spm install`.
+#[derive(Debug, Args)]
+pub struct InstallArgs {
+    /// The package, as `<package>` or `<source>/<package>`
+    #[arg(value_name = "PACKAGE")]
+    pub package: String,
+
+    /// Install this version rather than the newest
+    #[arg(long, value_name = "VERSION")]
+    pub version: Option<String>,
+
+    /// Work out what would be installed and change nothing
+    #[arg(long)]
+    pub dry_run: bool,
 }
 
 /// `spm search`.
