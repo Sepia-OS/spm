@@ -128,6 +128,19 @@ fn run() -> Result<()> {
             ui::installed(&outcome);
             Ok(())
         }
+        Command::Remove(args) => {
+            let reference = package_ref(&args.package)?;
+            // As with `install`, a dry run changes nothing and so waits for
+            // nobody.
+            let _lock = if args.dry_run {
+                None
+            } else {
+                Some(locked(&store)?)
+            };
+            let outcome = ops::remove::remove(&store, &reference, args.dry_run)?;
+            ui::removed(&outcome);
+            Ok(())
+        }
         Command::Search(args) => {
             let target = spm::model::name::Target::current();
             let found = ops::query::search(&store, &target, &args.needle)?;

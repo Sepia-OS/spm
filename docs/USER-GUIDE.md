@@ -163,28 +163,39 @@ To upgrade just one package:
 
 ```console
 # spm remove helix
-The following will be removed:
+Removed:
   helix         25.07.1
-  llvm-runtime  23.1.0   (no longer needed)
-Proceed? [Y/n]
+  llvm-runtime  23.1.0     (no longer needed)
+418 files removed.
 ```
 
 Exactly the files that were installed are removed, and nothing else. A file
 that another installed package also owns stays. Anything `spm` did not install
-is never touched.
+is never touched, and a directory goes only once the last thing in it has.
 
 Anything that came in as a dependency and is not needed by anything else goes
 with it. A package you asked for by name is never removed automatically,
-however unused it looks.
+however unused it looks — which is why `spm install` records whether you asked
+for something or whether it came along.
+
+Like `install`, `remove` does not stop to ask, and `--dry-run` is how to look
+first:
+
+```console
+# spm remove helix --dry-run
+The following will be removed:
+  helix         25.07.1
+  llvm-runtime  23.1.0     (no longer needed)
+418 files removed.
+Nothing was changed.
+```
 
 If something else still depends on what you are removing, `spm` refuses and
 tells you what:
 
 ```console
 # spm remove llvm-runtime
-'llvm-runtime' is required by:
-  helix  25.07.1
-Remove those first, or leave it in place.
+spm: 'llvm-runtime' is required by helix 25.07.1 - remove those first, or leave it in place
 ```
 
 ## Seeing what is installed

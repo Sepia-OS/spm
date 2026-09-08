@@ -1096,9 +1096,9 @@ so enabling one more of its features adds nothing to the tree and the crate
 still contains no `unsafe` at all — the same conclusion Step 10 reached about
 `flock`, by a different route.
 
-## M8 — `remove`
+## M8 — `remove` ✅
 
-### Step 34 — Removal
+### Step 34 — Removal ✅
 
 **Goal.** Take back exactly what was installed.
 **Files.** `src/ops/remove.rs`.
@@ -1107,8 +1107,41 @@ dependents. Delete the record's files in reverse order, skipping any path
 another record also claims. Remove directories that have emptied.
 **Done when.** Tests for: a blocked removal names its dependents; a shared file
 survives; directories are cleaned; nothing outside the record is touched.
+**Done.** `plan` and `remove`, with the four cases tested against devices built
+by running the real `install` over packages the real `create` built — so what is
+taken back is what was actually put on, rather than records a test wrote to
+describe an install that never happened.
 
-### Step 35 — Autoremove
+**Pruning directories is shared with the rollback**, which is what Step 12 said
+would happen: it left empty directories behind and recorded that this step owned
+the fix. `store::db::prune` is that fix and both halves of taking a package back
+use it, so an install that did not finish now leaves no trace either — an empty
+directory is a trace.
+
+Three things the step's list did not settle:
+
+- **A directory that will not go is not a failure.** It is not empty, it is not
+  there, or the filesystem said no. An empty directory left on a card harms
+  nothing, and failing a removal that has otherwise succeeded over one would.
+- **The root is never removed.** The walk is over a path relative to it and
+  stops when there is nothing left of that path, so there is no case in which it
+  reaches the top.
+- **A qualified name is a different question, not a different package.** There
+  is one record per name, so a device has at most one `helix`; `sepia/helix`
+  asks about the one that came from `sepia`, and if the one installed came from
+  somewhere else then what was asked about is not installed. That needed
+  `Error::NotInstalled`, because `PackageNotFound`'s advice is to update or
+  search — and a package that exists everywhere except on this device is not one
+  to go looking for.
+
+**The shared-file rule is a net rather than a mechanism.** `install` refuses to
+let two records claim one file, so on a device this tool built it takes nothing
+away, and the test that covers it writes the two records directly because
+nothing else can produce that state. It is kept because a record is a file
+somebody can edit, and deleting a file another package is using because two
+records disagreed is not a mistake worth being able to make.
+
+### Step 35 — Autoremove ✅
 
 **Goal.** Dependencies that are no longer needed go too.
 **Files.** `src/ops/remove.rs`.
@@ -1117,8 +1150,24 @@ depends on, until a pass changes nothing. A package installed explicitly is
 never taken automatically, however unreferenced it is.
 **Done when.** Removing the head of a three-deep chain removes all three; an
 explicitly installed middle package stops the cascade.
+**Done.** `with_unneeded`, with both cases, plus a dependency two packages share
+staying until the second of them goes.
 
----
+**The set is worked out before anything is deleted**, and the order it comes
+back in is part of the answer: what somebody asked for is the first line of what
+they are shown, and what followed from it comes after, in the order it followed.
+A set would have sorted them alphabetically and lost that.
+
+**The refusal is checked against what remains**, not against everything
+installed. A package that only an about-to-be-autoremoved package depends on can
+still go, which is the ordinary case for a chain: `middle` depends on `bottom`,
+and both are leaving.
+
+**The pass is a sweep rather than a trace.** It drops *any* unneeded dependency,
+not only the ones this removal orphaned. There should never be others — a
+removal always sweeps — but an upgrade to a version that dropped a dependency
+can leave one, and a device quietly accumulating packages nothing needs is worse
+than a removal that mentions one extra name.
 
 ## M9 — `upgrade`
 

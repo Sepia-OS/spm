@@ -231,6 +231,9 @@ impl<'store> Database<'store> {
     /// running. Leaving one of them holding the newer version's contents is a
     /// state the next install puts right; deleting it is not.
     fn undo(&self, record: &Record, committed: &[Record]) -> Result<()> {
+        let journal = self.store.partial_record_file(&record.metadata.name);
+        let mut emptied: Vec<PathBuf> = Vec::new();
+
         for file in &record.files {
             if committed
                 .iter()
@@ -243,7 +246,7 @@ impl<'store> Database<'store> {
                 // not come from this crate. Refusing beats deleting whatever
                 // it points at.
                 return Err(Error::Parse {
-                    path: self.store.partial_record_file(&record.metadata.name),
+                    path: journal,
                     message: format!(
                         "it claims the file {}, which is not inside the device's root",
                         file.display()
@@ -256,9 +259,67 @@ impl<'store> Database<'store> {
                 Err(source) if source.kind() == std::io::ErrorKind::NotFound => {}
                 Err(source) => return Err(Error::Io { path, source }),
             }
+            if let Some(parent) = file.parent()
+                && parent.components().next().is_some()
+                && !emptied.contains(&parent.to_path_buf())
+            {
+                emptied.push(parent.to_path_buf());
+            }
         }
+
+        // The directories the files were in, once the files are gone. Deepest
+        // first, so that a directory holding only other emptied ones goes too.
+        emptied.sort_by_key(|path| std::cmp::Reverse(path.components().count()));
+        for directory in &emptied {
+            prune(self.store.root(), directory, &journal)?;
+        }
+
         Ok(())
     }
+}
+
+/// Remove a directory and the directories above it, while they are empty.
+///
+/// `directory` is relative to `root`, and the root itself is never removed —
+/// the walk stops when there is nothing left of the relative path.
+///
+/// Directories are not owned by anybody. A record lists files, so nothing says
+/// which package a directory belongs to and the only safe rule is that one goes
+/// when the last thing in it does. Both halves of taking a package back need it:
+/// `remove`, and the rollback of an install that did not finish.
+///
+/// **A directory that will not go is not a failure.** It is not empty, or it is
+/// not there, or the filesystem said no; an empty directory left on the card
+/// harms nothing, and failing a removal that has otherwise succeeded over one
+/// would.
+///
+/// # Errors
+///
+/// [`Error::Parse`] if the path is not one this crate could have recorded — an
+/// absolute one, or one with `..` in it, which would walk out of the root.
+pub fn prune(root: &Path, directory: &Path, named_by: &Path) -> Result<()> {
+    let mut at = directory.to_path_buf();
+
+    while at.components().next().is_some() {
+        let Some(full) = under(root, &at) else {
+            return Err(Error::Parse {
+                path: named_by.to_path_buf(),
+                message: format!(
+                    "it claims the directory {}, which is not inside the device's root",
+                    at.display()
+                ),
+            });
+        };
+        if fs::remove_dir(&full).is_err() {
+            break;
+        }
+        at = match at.parent() {
+            Some(parent) => parent.to_path_buf(),
+            None => break,
+        };
+    }
+
+    Ok(())
 }
 
 /// Read one record, or `None` if the file is not there.
@@ -507,6 +568,90 @@ mod tests {
             "the unfinished install left a file behind"
         );
         assert!(db.is_installed(&package("helix")).unwrap());
+    }
+
+    #[test]
+    fn a_rollback_takes_the_directories_it_emptied_too() {
+        // Step 12 left these behind and said pruning belonged to `remove`.
+        // It does, and the rollback shares it: an install that did not finish
+        // should leave no trace, and an empty directory is a trace.
+        let directory = tempfile::tempdir().unwrap();
+        let store = Store::at(directory.path());
+        let db = Database::new(&store);
+        let files = ["usr/lib/helix/runtime/grammars/rust.so"];
+
+        db.begin(&record("helix", &files)).unwrap();
+        with_files(directory.path(), &files);
+
+        db.recover().unwrap();
+
+        for emptied in [
+            "usr/lib/helix/runtime/grammars",
+            "usr/lib/helix/runtime",
+            "usr/lib/helix",
+            "usr/lib",
+            "usr",
+        ] {
+            assert!(
+                !directory.path().join(emptied).exists(),
+                "{emptied} was left behind, empty"
+            );
+        }
+        assert!(directory.path().exists(), "the root itself is not ours");
+    }
+
+    #[test]
+    fn pruning_stops_at_the_first_directory_that_still_holds_something() {
+        let root = tempfile::tempdir().unwrap();
+        let deep = root.path().join("usr/lib/helix/runtime");
+        fs::create_dir_all(&deep).unwrap();
+        fs::write(root.path().join("usr/lib/keep-me"), b"not ours").unwrap();
+
+        prune(
+            root.path(),
+            Path::new("usr/lib/helix/runtime"),
+            Path::new("a-record.json"),
+        )
+        .unwrap();
+
+        assert!(!root.path().join("usr/lib/helix").exists());
+        assert!(root.path().join("usr/lib").exists(), "it is not empty");
+        assert!(root.path().join("usr/lib/keep-me").exists());
+    }
+
+    #[test]
+    fn pruning_never_reaches_the_root() {
+        let root = tempfile::tempdir().unwrap();
+        fs::create_dir_all(root.path().join("usr")).unwrap();
+
+        prune(root.path(), Path::new("usr"), Path::new("a-record.json")).unwrap();
+
+        assert!(!root.path().join("usr").exists());
+        assert!(root.path().exists(), "the root was removed");
+    }
+
+    #[test]
+    fn pruning_a_directory_outside_the_root_is_refused() {
+        let root = tempfile::tempdir().unwrap();
+        for claim in ["/etc", "../../etc"] {
+            match prune(root.path(), Path::new(claim), Path::new("a-record.json")) {
+                Err(Error::Parse { message, .. }) => assert!(message.contains("root"), "{message}"),
+                other => panic!("expected a refusal for {claim}, got {other:?}"),
+            }
+        }
+    }
+
+    #[test]
+    fn pruning_something_that_is_not_there_is_not_an_error() {
+        // A directory that will not go is not a failure - it is not empty, or
+        // it is not there. Neither is a reason to fail a removal.
+        let root = tempfile::tempdir().unwrap();
+        prune(
+            root.path(),
+            Path::new("usr/nowhere"),
+            Path::new("a-record.json"),
+        )
+        .unwrap();
     }
 
     #[test]
