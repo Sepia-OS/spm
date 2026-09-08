@@ -36,6 +36,7 @@ pub mod atomic;
 pub mod cache;
 pub mod config;
 pub mod db;
+pub mod index;
 pub mod lock;
 
 /// Where everything lives.

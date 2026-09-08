@@ -640,9 +640,9 @@ Two things beyond the step:
 
 ---
 
-## M5 — Sources
+## M5 — Sources ✅
 
-### Step 21 — `list-sources` and `source-info`
+### Step 21 — `list-sources` and `source-info` ✅
 
 **Goal.** The two read-only source commands.
 **Files.** `src/ops/query.rs`, `src/ui.rs`, `src/cli.rs`.
@@ -652,8 +652,35 @@ must read as exactly that, not as one offering no packages. No sources at all
 is a fresh device, so say so and name `add-source`.
 **Done when.** Tests for: no sources, one never-updated source, two sources
 with one default.
+**Done.** `list_sources` and `source_info`, the two subcommands, and 8 tests
+covering all three cases plus the counting of installed packages.
 
-### Step 22 — `add-source`
+**A never-fetched index is an `Option`, not an empty index.** That is the
+distinction the step names, and making it a type rather than a convention is
+what stops it being lost: a caller has to say which it means, and both printers
+do — `never` against a count, and "unknown until it has been updated".
+
+Two things this step needed that the design had not placed:
+
+- **`store/index.rs`**, to read and write the local copy of an index. `update`
+  writes it and everything else reads it, so it is mechanism and belongs in
+  `store`; the design's tree missed it, as it missed `ops/source.rs`, and both
+  are now in it.
+- **One date formatter, in `ui`.** Step 19 had written one inside `https.rs`
+  for the clock message; a listing needs the same thing, and two would
+  eventually disagree. `net` calling a formatter is not `net` printing.
+
+**The listing shows a date rather than "2 hours ago"**, which is what the user
+guide had promised. A relative time needs to know what the time is now, and on
+a device that has just booted that is precisely what cannot be relied on — the
+same fact Step 19 exists for. The guide has been corrected to what the command
+prints.
+
+One limitation worth naming: `ui` prints straight to stdout, so its output
+cannot be asserted in a test. Everything here is tested through the `ops`
+functions instead. Giving `ui` a writer would fix that, and is not this step.
+
+### Step 22 — `add-source` ✅
 
 **Goal.** Add a source, learning its name from its index.
 **Files.** `src/ops/source.rs`.
@@ -665,8 +692,32 @@ default. The first source added becomes the default whichever way.
 in place; `--default` moves the flag; a name collision is refused and names the
 holder; a non-`https` URL is refused; a failed fetch leaves the config
 untouched.
+**Done.** `add_source`, the subcommand, and 9 tests — every case on that list,
+plus `--name`, plus that the index really is fetched so the source is usable
+without an `update` first.
 
-### Step 23 — `remove-source`
+**A non-`https` URL is refused before the fetch**, and the test asserts the
+transport was never asked. Refusing afterwards would already have told somebody
+what this device was about to look for. The transport refuses one too; this one
+exists to cost nothing and to say why in the words of the command.
+
+**Re-adding a source does not quietly drop its default flag.** The rule is
+`--default`, or the config is empty, or the entry already had it — so running
+`add-source` twice is idempotent rather than a way to lose the default by
+accident.
+
+One thing the step's design did not anticipate: **`--name` means the name a
+device files an index under is not always the name the index declares.**
+`index::write` therefore takes the local name rather than reading it off the
+index, and the index itself is stored exactly as fetched. What a source calls
+itself is its business; what this device calls it is the device's.
+
+The order of writes is deliberate: the index first, then the configuration. A
+configured source whose index is missing is a source that needs an `update`,
+which is recoverable and obvious. The other way round leaves an index file that
+nothing refers to.
+
+### Step 23 — `remove-source` ✅
 
 **Goal.** Remove a source without touching what it installed.
 **Files.** `src/ops/source.rs`.
@@ -676,6 +727,26 @@ source, or reports that there is now none.
 **Done when.** Tests for: installed packages survive; the count of affected
 packages is reported; the default is promoted when one source remains and not
 when two do.
+**Done.** `remove_source`, the subcommand, and 7 tests covering all three, plus
+removing the only source, removing one nothing came from, and a URL that is not
+configured.
+
+**The rule the command exists to keep is that it removes nothing.** A test
+installs a package from the source, removes the source, and then reads the
+record back: still installed, still recording the source it came from. That is
+why a record can name a source that is no longer configured, and why
+`list-sources` had to cope with exactly that in Step 21.
+
+**The default moves rather than disappearing.** With one source left it takes
+the flag, for the same reason the first source added has it; with several left
+nothing here can guess, so there is no default and the command says so and says
+how to name one. Both are tested, because "promote when there is one" and "do
+not guess when there are several" are two rules and a single test would only
+cover one.
+
+`losing_upgrades` is counted before anything changes and reported afterwards.
+It costs no files, which is the point — what those packages lose is upgrades,
+and somebody removing a source should be told that in words.
 
 ---
 
