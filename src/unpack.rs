@@ -780,10 +780,21 @@ mod tests {
         // one either way - the archive did not get a say.
         use std::os::unix::fs::MetadataExt;
         let directory = tempfile::tempdir().unwrap();
+
+        // Whoever is running, learnt from a file they wrote themselves rather
+        // than assumed. The uid the archive claims is then one step away from
+        // it: a fixed number would eventually *be* the current user, and a test
+        // that passes because the archive named whoever ran it asserts nothing.
+        // GitHub's runner is uid 1001, which is how this was found out.
+        let reference = directory.path().join("ours");
+        fs::write(&reference, b"ours").unwrap();
+        let ours = fs::metadata(&reference).unwrap().uid();
+        let claimed = u64::from(ours).saturating_add(1);
+
         let archive = payload(
             directory.path(),
             vec![Member {
-                uid: 1001,
+                uid: claimed,
                 ..file("usr/bin/grit", b"binary")
             }],
         );
@@ -791,12 +802,12 @@ mod tests {
 
         extracting_into(&archive, &root).unwrap();
 
-        let reference = directory.path().join("ours");
-        fs::write(&reference, b"ours").unwrap();
-        let ours = fs::metadata(&reference).unwrap().uid();
         let unpacked = fs::metadata(root.join("usr/bin/grit")).unwrap().uid();
-        assert_eq!(unpacked, ours, "the archive's uid 1001 was restored");
-        assert_ne!(unpacked, 1001, "unless the tests run as uid 1001");
+        assert_eq!(
+            unpacked, ours,
+            "the archive claimed uid {claimed} and got it"
+        );
+        assert_ne!(u64::from(unpacked), claimed);
     }
 
     #[test]
