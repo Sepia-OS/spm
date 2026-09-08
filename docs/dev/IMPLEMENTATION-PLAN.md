@@ -353,9 +353,9 @@ and rollback will use it once it exists.
 
 ---
 
-## M3 — `create`
+## M3 — `create` ✅
 
-### Step 13 — Packing
+### Step 13 — Packing ✅
 
 **Goal.** A staged tree becomes `data.tar.gz`, hashed as it is written.
 **Files.** `src/ops/create.rs`.
@@ -364,8 +364,29 @@ the digest is not known until it is finished and it must go into the metadata
 that is packed. Store paths relative, no leading `./`, sorted, with a fixed
 mtime and `root:root` ownership so the same tree gives the same archive.
 **Done when.** Packing a fixture tree twice byte-for-byte matches.
+**Done.** `pack_payload`, with 11 tests. Packing the same tree twice gives the
+same bytes, and — the stronger claim, since it is what actually differs between
+two builds — **touching a file's mtime and repacking gives the same bytes too**.
 
-### Step 14 — The refusals
+The digest is taken of the compressed file, in the same pass that writes it:
+`tar -> gzip -> hash -> disk`. So the size and the digest both come out of one
+walk of the tree, and nothing is read back to compute them.
+
+Three things the step's list implied and the tests pin down:
+
+- **A symlink is packed as a link.** `grit` ships `git -> grit`, and following
+  it here would put a second copy of the binary on a card under another name.
+  The walk uses `symlink_metadata` for exactly this.
+- **Modes are normalised to 755 or 644.** A staged tree carries the umask of the
+  machine that built it, which is not a property of the package; the executable
+  bit is the one distinction that matters on the device.
+- **Directories are entries too**, so an empty one survives and the order is the
+  sorted order rather than whatever order a directory happened to be read in.
+
+`tar`, `flate2` (with the Rust backend, no `zlib` to cross-compile) and `sha2`
+are the new dependencies, all three named in the design's table.
+
+### Step 14 — The refusals ✅
 
 **Goal.** The four rules from ARCHITECTURE.md.
 **Files.** `src/ops/create.rs`.
@@ -374,8 +395,32 @@ mtime and `root:root` ownership so the same tree gives the same archive.
 names the package.
 **Done when.** A test tree for each refusal fails with its own message, and the
 good tree passes.
+**Done.** `check_tree`, with 8 tests — one per refusal, plus the good tree, plus
+the cases that would otherwise be assumed.
 
-### Step 15 — The three outputs
+**Only three of the four rules are checked, and the fourth is the interesting
+one.** "The metadata has to name a package" is not checked because it *cannot
+be broken*: a `Metadata` without a name, a version or a target does not parse,
+so no such value exists to hand to this function. The test for it asserts the
+parse fails, which is where the rule actually lives.
+
+A new error variant, `NotPackageable { path, reason }`, mapped to exit 2. It
+carries the path rather than formatting it into a message, as the guidelines
+ask, so the offending file is a value and not a sentence.
+
+Two things the rules leave open, decided here and tested:
+
+- **The licence has to be under the package's own name.** A tree carrying
+  `usr/share/licenses/helix/LICENSE` is not a licensed `grit` package, and a
+  test says so — that is the mistake a copied build script makes.
+- **Any non-empty file counts**, so `COPYING` or `NOTICE` will do. An empty
+  `LICENSE` does not, which is the other way a build script gets this wrong.
+
+The libc rule uses the same names the `rootfs` build already refuses in every
+sibling package — `libc.so*`, `ld-musl-*`, `ld-linux*` — because it is the same
+rule for the same reason, and a second one would eventually disagree.
+
+### Step 15 — The three outputs ✅
 
 **Goal.** `create` writes the package, the metadata and `SHA256SUMS`.
 **Files.** `src/ops/create.rs`, `src/cli.rs`.
@@ -392,8 +437,31 @@ it does not yet bite because nothing there is derived from a version.
 **Done when.** `spm create --root … --metadata …` produces all three,
 `sha256sum -c SHA256SUMS` passes, and the metadata inside the archive has a
 digest that matches its own `data.tar.gz`.
+**Done.** `create`, the CLI around it, and 10 tests. All three conditions were
+checked by running the real thing rather than only in tests: `spm create`
+against a staged tree wrote the three files, `shasum -a 256 -c SHA256SUMS` said
+`OK`, and the digest in the packed metadata matched the `data.tar.gz` beside it
+byte for byte. The same checks are now tests, so they are not a thing I did
+once.
 
-### Step 16 — Fixture packages
+- **The author's own metadata file is never written to.** The digest goes into
+  the copy that is packed and the copy published beside it; the file in the
+  package repository is read and left alone, which a test asserts.
+- **The version hazard recorded in Step 8 is closed here.** A name and a target
+  cannot escape a directory because they are validated where they are made; a
+  version is whatever upstream chose, and this is the one place one becomes a
+  filename. `../../evil` as a version is refused, naming the metadata file it
+  came from.
+- **The whole package is deterministic**, not just the payload: building the
+  same tree twice gives the same bytes through both layers.
+- **A tree that breaks a rule is refused before anything is written**, so a
+  failed `create` leaves no half-published release behind.
+
+`clap` is the last dependency the design's table named. A malformed command
+line is `clap`'s to report, and it exits 2 — the code the user guide documents
+for wrong usage.
+
+### Step 16 — Fixture packages ✅
 
 **Goal.** Test fixtures built by the tool itself.
 **Files.** `tests/fixtures/`, `tests/support/mod.rs`.
@@ -403,6 +471,30 @@ uses these, and they are produced by `create` rather than checked in, so the
 format has exactly one implementation.
 **Done when.** The helper builds all three and a test installs nothing yet but
 asserts they exist and verify.
+**Done.** `tests/support/mod.rs` and `tests/fixtures.rs`, 7 tests. The three
+shapes are there — `plain` stands alone, `dependent` needs it, and `rival`
+ships the same file `plain` does, which is the conflict Step 31 has to refuse.
+Each one is built by `create`, so a change to the package format cannot leave a
+fixture describing the old one.
+
+The builder takes a version, a target, arbitrary files, dependencies and a
+missing licence, because later steps need more than the three: Step 25 needs a
+package for another target, Step 27 needs a chain and a diamond, and Step 36
+needs two versions of one package.
+
+`Built::verify` is the whole chain in one call — the package matches the digest
+beside it, the digest file is what `sha256sum -c` reads, the packed metadata
+describes the payload beside it, and the metadata published beside the package
+is the same bytes as the one inside.
+
+**There is no `tests/fixtures/` directory**, as this step's file list expected:
+nothing is checked in, because the fixtures are built. The builder lives in
+`tests/support/` and the test that they hold together is `tests/fixtures.rs`.
+
+One thing this step found: **an integration test is its own crate**, so the
+`#[cfg(test)]` allows that let unit tests use `unwrap` do not reach `tests/`.
+Each file there carries the allow at crate level instead, and the development
+guidelines now say so rather than leaving the next test crate to rediscover it.
 
 ---
 

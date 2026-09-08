@@ -192,6 +192,16 @@ Adding a crate is a decision to be defended in the pull request, against:
 
 - **Unit tests live beside the code** in `#[cfg(test)] mod tests`; integration
   tests live in `tests/` and use the public entry points.
+- **Every test module and every file under `tests/` carries the same allow**:
+
+  ```rust
+  #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic,
+           reason = "everything under tests/ is test code, and a test that cannot fail loudly is worse")]
+  ```
+
+  The lint table denies those crate-wide, and clippy cannot tell that a file in
+  `tests/` is a test — each one is its own crate, so a per-module allow does not
+  reach it. Inside `src/`, the same three go on the `#[cfg(test)] mod tests`.
 - **No test touches the network.** The `Transport` trait exists for this;
   fixtures are served from a temporary directory.
 - **No test writes outside a temporary root.** Everything is built from the

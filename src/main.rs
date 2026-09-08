@@ -25,8 +25,11 @@
 
 use std::process::ExitCode;
 
+use clap::Parser;
+
+use spm::cli::{Cli, Command};
 use spm::error::Result;
-use spm::ui;
+use spm::{ops, ui};
 
 fn main() -> ExitCode {
     match run() {
@@ -40,9 +43,12 @@ fn main() -> ExitCode {
 
 /// Everything the process does, so that the only thing above it is the mapping
 /// from a failure to an exit code.
-///
-/// Step 4 onwards of `docs/dev/IMPLEMENTATION-PLAN.md` gives this argument
-/// parsing and dispatch. Until then it succeeds without doing anything.
 fn run() -> Result<()> {
-    Ok(())
+    match Cli::parse().command {
+        Command::Create(args) => {
+            let created = ops::create::create(&args.root, &args.metadata, &args.output)?;
+            ui::created(&created);
+            Ok(())
+        }
+    }
 }
