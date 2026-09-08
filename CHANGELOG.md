@@ -10,6 +10,33 @@ once it has something to version.
 
 ### Added
 
+- Downloads that stream to disk and hash on the way past, never into memory: a
+  package is 216 MiB and the smallest supported board has 512 MiB of RAM. A
+  test measures the largest buffer the download ever asks for and fails if it
+  grows with the file. The file is written beside its destination and renamed
+  into place, so an interrupted download cannot be mistaken for a complete one
+  and a failed retry does not destroy the copy that already worked.
+- A device whose clock has not been set is told about its clock. A Raspberry Pi
+  has no battery-backed clock, so until `sepia-time` runs it believes it is
+  1970 — and every certificate on earth begins later than that, so every one of
+  them is "not yet valid". Reporting that as a certificate error sends somebody
+  to look at the server, the source or their network, none of which is wrong.
+  The message names the clock, says what it reads, and points at `sepia-time`.
+  Only a TLS failure can become that message, and only when the clock is
+  behind the image's own build date.
+- The real transport: HTTPS with its own root certificates compiled in, because
+  a SepiaOS card has no trust store to read. A plain `http://` URL is refused
+  before a connection is opened rather than upgraded behind the user's back,
+  and a certificate signed by nobody the compiled-in roots know is refused —
+  both tested against a listener the test starts on the loopback address. A
+  `GITHUB_TOKEN` is sent to GitHub and to no other host, checked on the whole
+  host name. Compressed transfers are not asked for, since everything here is
+  checked against a digest of a file.
+- `Transport`, the one seam between `spm` and the network: fetch a URL, get
+  something to read. Everything above it takes a `&dyn Transport`, so a test
+  drives the real `update`, the real `install` and the real verification with
+  fixtures behind them and no network anywhere. With it a fake that serves a
+  directory, can be told to break a URL, and remembers what was asked for.
 - Test fixtures, built by `spm create` rather than checked in — so there is one
   implementation of the package format and the fixtures cannot drift from it.
   Three named shapes for the steps that follow: one package that stands alone,

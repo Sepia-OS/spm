@@ -19,5 +19,34 @@
 
 //! The seam between `spm` and the network.
 //!
-//! Everything above takes a `&dyn Transport`, so the tests exercise the
-//! real code path against fixtures and no test ever needs a network.
+//! One method: fetch a URL, and give back something to read. Everything above
+//! takes a `&dyn Transport`, so a test drives the real code path — the real
+//! `update`, the real `install`, the real verification — with fixtures behind
+//! it and no network anywhere.
+//!
+//! That is why the trait returns a boxed reader rather than `impl Read`: a
+//! trait with a return-position `impl Trait` is not object-safe, and `&dyn
+//! Transport` is the whole point.
+//!
+//! It streams. A package is 216 MiB and the smallest supported board has
+//! 512 MiB of RAM, so nothing above this may be handed a `Vec<u8>` of a
+//! download.
+
+use std::io::Read;
+
+use crate::error::Result;
+
+/// Somewhere bytes come from.
+pub trait Transport {
+    /// Fetch a URL.
+    ///
+    /// The reader is the response body, streamed. What it is read into is the
+    /// caller's business: an index is small enough to hold, a package is not.
+    ///
+    /// # Errors
+    ///
+    /// [`crate::error::Error::Network`] if it cannot be fetched,
+    /// [`crate::error::Error::ClockBehind`] if a certificate was rejected and
+    /// the device's clock is the likely reason.
+    fn get(&self, url: &str) -> Result<Box<dyn Read>>;
+}

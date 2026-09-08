@@ -13,6 +13,7 @@ sha2 = "0.11.0"
 tar = "0.4.46"
 tempfile = "3.27.0"
 thiserror = "2.0.20"
+ureq = { version = "3.4.1", default-features = false, features = ["rustls", "rustls-webpki-roots"] }
 
 # Configured here rather than on the CI command line, so that a build in a
 # worktree enforces exactly what CI does. A lint that only fires in CI is
@@ -26,3 +27,7 @@ all = { level = "deny", priority = -1 }
 unwrap_used = "deny"
 expect_used = "deny"
 panic = "deny"
+
+[dev-dependencies]
+rcgen = "0.14.10"
+rustls = { version = "0.23.44", default-features = false, features = ["ring", "std"] }

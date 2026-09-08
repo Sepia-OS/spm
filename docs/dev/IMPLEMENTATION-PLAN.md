@@ -498,9 +498,9 @@ guidelines now say so rather than leaving the next test crate to rediscover it.
 
 ---
 
-## M4 — Network
+## M4 — Network ✅
 
-### Step 17 — `trait Transport`
+### Step 17 — `trait Transport` ✅
 
 **Goal.** The seam the tests replace.
 **Files.** `src/net/transport.rs`.
@@ -508,8 +508,27 @@ guidelines now say so rather than leaving the next test crate to rediscover it.
 takes a `&dyn Transport`, so no test ever touches the network.
 **Done when.** A fake transport serving a temporary directory exists in
 `tests/support/`, and a test reads a fixture index through it.
+**Done.** `Transport`, the fake in `tests/support/net.rs`, and 6 tests. The
+done-when test builds two fixture packages, serves them and an index describing
+them, reads the index through the transport and then asks it for the newest
+version — which is the sequence `update` and `install` will follow.
 
-### Step 18 — HTTPS
+**The trait returns `Box<dyn Read>` rather than `impl Read`.** A
+return-position `impl Trait` makes a trait not object-safe, and `&dyn
+Transport` is the entire point of having one: it is what lets a test drive the
+real code path with fixtures behind it.
+
+The fake does three things beyond serving files, each because a later step needs
+it: it can be told to **break a URL** (Step 24 wants one source of three
+unreachable), it **records what was asked for** in order, and it hands back
+bytes rather than text so a package can go through it whole.
+
+`index_of` builds a fixture index out of the real `model::index` types rather
+than out of text, so a fixture cannot describe a format that no longer exists —
+it would stop compiling instead. It groups versions under one package, because
+that is what an index does and what `upgrade` will need to see.
+
+### Step 18 — HTTPS ✅
 
 **Goal.** The real transport.
 **Files.** `src/net/https.rs`.
@@ -519,8 +538,37 @@ failures and 5xx with a growing delay, never on 4xx. Send `GITHUB_TOKEN` when
 it is set.
 **Done when.** A `http://` URL is refused without a request being made, and a
 test against a local TLS server with a known-bad certificate fails closed.
+**Done.** `Https`, with 9 tests. Both halves of the done-when are tested as
+stated rather than approximated:
 
-### Step 19 — The clock error
+- **Refused before anything is opened**, proved by a listener that counts what
+  reaches it. A test that only checked the error would pass just as well if the
+  refusal happened *after* the connection — and a request already made has
+  already told somebody what this device is looking for.
+- **A self-signed certificate is rejected**, against a `rustls` server started
+  by the test on the loopback address with a certificate generated and thrown
+  away with it. This is the property a card depends on: the compiled-in roots
+  are the only thing `spm` trusts, because there is no system trust store to
+  fall back on. Nothing here resolves a name or leaves the machine.
+
+Two decisions beyond the step's list:
+
+- **`ureq`'s `gzip` feature is off.** Everything is verified against a digest of
+  a file, and an automatic transfer decoding is one more difference between
+  what a server sent and what a digest describes. `curl`, which every sibling
+  repository uses, does not ask for one either.
+- **`GITHUB_TOKEN` goes to GitHub and nowhere else**, checked on the whole host
+  so that `github.com.example.test` is not GitHub. A source is a URL somebody
+  typed; sending a token to it because it happens to be in the environment
+  would hand the token to whoever runs that host. The check is a pure function
+  so it can be tested — reading the environment is `unsafe` in this edition,
+  and a function that read it could not be.
+
+The retry policy is tested twice over: which failures are worth retrying, as a
+unit test, and that a dying connection really is tried `ATTEMPTS` times, by
+counting connections.
+
+### Step 19 — The clock error ✅
 
 **Goal.** A certificate that is not yet valid says why.
 **Files.** `src/net/https.rs`, `src/error.rs`.
@@ -531,8 +579,36 @@ in the wrong place entirely. Read `/etc/sepia-build-date` to say how far behind
 the clock is.
 **Done when.** A test with the validator's clock set to 1970 produces the clock
 message rather than the generic TLS one.
+**Done.** Both directions are tested against the self-signed server from Step
+18: a clock reading 1970 gets the clock message, and a clock that is right gets
+the certificate error — because a genuinely bad certificate must not be blamed
+on the time forever.
 
-### Step 20 — Downloads
+**Only a TLS failure can become a clock message.** A refused connection has
+nothing to do with what the device thinks the time is, and a third test holds
+that line.
+
+Two things this step found rather than assumed:
+
+- **`ureq` flattens a certificate failure into `Error::Io`.** Matching on
+  `Error::Rustls` never fired, and the first version of this failed with
+  `invalid peer certificate: UnknownIssuer` arriving as an I/O error. The
+  classification now looks at the message for that case, deliberately: the
+  alternative is depending on `rustls` directly and downcasting, which fails
+  *silently* if the two ever resolve to different versions. A string check
+  fails loudly, and this step's own test is what holds it up.
+- **The clock is compared against `/etc/sepia-build-date`**, which `rootfs`
+  writes and `sepia-time` already uses for the same purpose. Where there is no
+  such file — a workstation, or an older card — the floor is 2025-01-01, since
+  a clock earlier than that is not a clock anybody set. A build date that will
+  not parse falls back too, rather than making every certificate failure a
+  clock message.
+
+`date_of` is Howard Hinnant's civil-from-days, written out rather than taken
+from a crate: one date in one format against a dozen lines of arithmetic, and
+the leap day is tested.
+
+### Step 20 — Downloads ✅
 
 **Goal.** Stream to disk, hashing as it goes.
 **Files.** `src/net/download.rs`.
@@ -542,6 +618,25 @@ resumed.
 **Done when.** A test downloads a 50 MiB fixture through the fake transport,
 asserts the digest, and asserts peak memory does not scale with the file (by
 construction — the reader is bounded).
+**Done.** `download::to_file` and `to_string`, with 8 tests.
+
+**Boundedness is measured, not asserted by construction.** A transport in the
+test records the largest buffer it is ever asked to fill, and the test fails if
+that grows with the file: 50 MiB in, and nothing reads more than a megabyte at
+a time. "By construction" is how it is true; a test is how it stays true.
+
+The download goes through `store::atomic`, so the file appears whole or not at
+all — a download interrupted by a power cut cannot be mistaken for a complete
+one, and a failed retry does not destroy the copy that worked. Both are tested
+with a transport whose body dies partway.
+
+Two things beyond the step:
+
+- **The fake transport now streams from disk** instead of reading a file into
+  memory first. A fake that slurped would hide a caller that slurped.
+- **`to_string` takes a limit.** An index has to be parsed in one go, so
+  something has to read it whole — and the other end decides how much it sends.
+  The limit is what makes that decision this side's.
 
 ---
 
