@@ -57,7 +57,7 @@ use crate::model::version::Version;
 use crate::net::download;
 use crate::net::transport::Transport;
 use crate::ops::create::{METADATA, PAYLOAD};
-use crate::ops::resolve::{self, Selected};
+use crate::ops::resolve::{self, Needed, Selected};
 use crate::store::db::Database;
 use crate::store::{Store, cache, space};
 use crate::{ui, unpack};
@@ -167,7 +167,25 @@ pub fn plan(
     version: Option<&Version>,
 ) -> Result<Plan> {
     let root = resolve::select(store, reference, target, version)?;
-    let needed = resolve::with_dependencies(store, &root, target)?;
+    let roots = [Needed {
+        selected: root,
+        // Whatever it was here for before, it is asked for now.
+        reason: Reason::Explicit,
+    }];
+    plan_for(store, resolve::with_dependencies(store, &roots, target)?)
+}
+
+/// What a set that has already been resolved amounts to.
+///
+/// The planning step, from a set rather than from a name. `upgrade` works out
+/// its own set — every installed package with a newer version, minus the ones
+/// whose dependencies cannot be satisfied — and then joins `install` here,
+/// rather than there being a second path that fetches, checks and unpacks.
+///
+/// # Errors
+///
+/// [`Error::Io`] or [`Error::Parse`] if the device's own records cannot be read.
+pub fn plan_for(store: &Store, needed: Vec<Needed>) -> Result<Plan> {
     let database = Database::new(store);
 
     let mut steps = Vec::new();
@@ -243,17 +261,35 @@ pub fn install(
         });
     }
 
-    enough_room(store, plan.download)?;
-
-    for step in &plan.steps {
-        one(store, transport, step)?;
-    }
+    carry_out(store, transport, &plan)?;
 
     Ok(Outcome {
         rolled_back,
         plan,
         changed: true,
     })
+}
+
+/// Do what a plan says: check the room, then fetch, check and unpack each of it.
+///
+/// The other half of what `upgrade` reuses. Everything that can be refused
+/// without touching the device has been refused by the time this runs.
+///
+/// # Errors
+///
+/// [`Error::NotEnoughSpace`] before anything is fetched,
+/// [`Error::Verification`] if either digest does not match,
+/// [`Error::UnsafeEntry`] if the package holds something extraction will not
+/// write, [`Error::FileConflict`] or [`Error::FileUnowned`] if a file is
+/// already spoken for, and [`Error::Io`] for the rest.
+pub fn carry_out(store: &Store, transport: &dyn Transport, plan: &Plan) -> Result<()> {
+    enough_room(store, plan.download)?;
+
+    for step in &plan.steps {
+        one(store, transport, step)?;
+    }
+
+    Ok(())
 }
 
 /// Refuse before filling the root filesystem, rather than after.

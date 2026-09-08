@@ -51,6 +51,9 @@ pub enum Command {
     /// Remove a package, and anything that came in with it and is now unneeded
     Remove(RemoveArgs),
 
+    /// Move installed packages onto the newest versions the indexes offer
+    Upgrade(UpgradeArgs),
+
     /// Search the indexes for a package
     Search(SearchArgs),
 
@@ -112,6 +115,18 @@ pub struct RemoveArgs {
     pub package: String,
 
     /// Work out what would be removed and change nothing
+    #[arg(long)]
+    pub dry_run: bool,
+}
+
+/// `spm upgrade`.
+#[derive(Debug, Args)]
+pub struct UpgradeArgs {
+    /// Upgrade only this package rather than everything installed
+    #[arg(value_name = "PACKAGE")]
+    pub package: Option<String>,
+
+    /// Work out what would be upgraded and change nothing
     #[arg(long)]
     pub dry_run: bool,
 }

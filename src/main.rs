@@ -141,6 +141,28 @@ fn run() -> Result<()> {
             ui::removed(&outcome);
             Ok(())
         }
+        Command::Upgrade(args) => {
+            let target = spm::model::name::Target::current();
+            let only = args
+                .package
+                .as_deref()
+                .map(|name| {
+                    spm::model::name::PackageName::parse(name)
+                        .map_err(|reason| spm::error::Error::Usage(format!("'{name}': {reason}")))
+                })
+                .transpose()?;
+            let _lock = if args.dry_run {
+                None
+            } else {
+                Some(locked(&store)?)
+            };
+            let transport = spm::net::https::Https::new();
+            let report =
+                ops::upgrade::upgrade(&store, &transport, &target, only.as_ref(), args.dry_run)?;
+            ui::upgraded(&report);
+            // Printed first, then the failure: a script should see both.
+            report.outcome()
+        }
         Command::Search(args) => {
             let target = spm::model::name::Target::current();
             let found = ops::query::search(&store, &target, &args.needle)?;

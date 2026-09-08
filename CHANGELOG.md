@@ -10,6 +10,20 @@ once it has something to version.
 
 ### Added
 
+- `spm upgrade`, which moves installed packages onto the newest versions the
+  local indexes offer — so it finds nothing an `spm update` did not, which is
+  what makes what it will do the same as what `--dry-run` said it would. A
+  newer version comes from the source the package was installed from: taking
+  one from elsewhere because the name matched would swap a package for a
+  different package of the same name, so a source that has been removed offers
+  nothing, exactly as `remove-source` warns at the time.
+- One package that cannot be upgraded is no longer a reason to leave a device
+  unpatched. A package whose new version needs something that cannot be
+  satisfied is left where it is and named, everything else still moves, and the
+  command finishes non-zero so a script can tell a complete job from a partial
+  one — the same shape as `spm update`, for the same reason.
+- `spm upgrade <package>` for one package, and `spm upgrade --dry-run` to look
+  first.
 - `spm remove`, which takes back exactly what was installed and nothing else.
   A file another installed package also claims stays; a file no record claims
   is never touched, because `spm` does not remove what it did not install; and
@@ -367,6 +381,16 @@ once it has something to version.
 
 ### Changed
 
+- `upgrade` is not a second install path. `install` is split at the seam the
+  design named — working out what a resolved set amounts to, and then carrying
+  it out — and `upgrade` works out its own set and joins there, so the room
+  check, the two digests, the extraction rules and the journal have exactly one
+  implementation between the two commands.
+- A package that came in as a dependency stays one when it is upgraded.
+  Promoting it because it moved would quietly take it out of autoremove's reach
+  for ever, so dependency resolution now takes each root together with the
+  reason it is to be recorded under: `install` makes what you asked for
+  explicit whatever it was before, and `upgrade` must not.
 - **An index entry now carries the size of the package**, as `bytes`, and one
   written without it is refused. Both things that need a package's size happen
   before it is fetched — the download total `spm install` prints, and the check

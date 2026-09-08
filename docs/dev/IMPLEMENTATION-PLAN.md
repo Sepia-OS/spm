@@ -1169,9 +1169,9 @@ removal always sweeps — but an upgrade to a version that dropped a dependency
 can leave one, and a device quietly accumulating packages nothing needs is worse
 than a removal that mentions one extra name.
 
-## M9 — `upgrade`
+## M9 — `upgrade` ✅
 
-### Step 36 — `upgrade`
+### Step 36 — `upgrade` ✅
 
 **Goal.** Move installed packages onto newer versions.
 **Files.** `src/ops/upgrade.rs`.
@@ -1183,8 +1183,54 @@ planning step onward rather than writing a second install path.
 **Done when.** Tests for: one of three unsatisfiable, the other two upgraded,
 exit non-zero; `upgrade <name>` touching only that package; `--dry-run`
 changing nothing.
+**Done.** `upgrade`, 12 tests, and **no second install path**: `install` was
+split at exactly the seam the step names, into `plan_for` — what a set that has
+already been resolved amounts to — and `carry_out` — the room check, the two
+digests, the extraction rules and the journal. `upgrade` works out its own set
+and joins there.
 
----
+**Two resolutions, on purpose.** Each candidate's dependencies are resolved
+*alone* first, because that is the only way to know which package to blame:
+resolving them all together would mean one unsatisfiable package taking the
+whole upgrade down with it, which is the opposite of what this command is for.
+The survivors are then resolved together, so a dependency two of them share is
+worked out once and at one version.
+
+Three things the step's list did not settle:
+
+- **A newer version comes from the source the package came from.** A record
+  says where it was installed from, and taking an upgrade from another source
+  because the name matched would swap a package for a different package of the
+  same name. So a source that has been removed offers nothing — which is
+  exactly what `remove-source` says will happen, and there is now a test that
+  it does.
+- **A package that came in as a dependency stays one when it moves.** Making it
+  explicit because it was upgraded would quietly take it out of autoremove's
+  reach for ever. That is why `resolve::with_dependencies` now takes its roots
+  *with the reason each is to be recorded under*: `install` makes a root
+  explicit whatever it was, and `upgrade` must not.
+- **Every way of having nothing to do is the same answer.** The source is gone,
+  its index was never fetched, it no longer lists the package, it has nothing
+  for this machine, or what it has is not newer. None is a failure and none is
+  something a person can act on differently, so none of them is told apart.
+
+**`with_dependencies` now takes several roots**, which is what let the survivors
+be resolved as one set. That has one consequence worth recording: **a circle is
+only found below a root.** Two roots that need each other are not reported as
+one, and should not be — both are in the set already, so the set *can* be
+completed, which is the only thing a circle would have made impossible.
+
+**The exit is separate from the work**, as `update`'s is: the caller prints
+everything that happened *and then* fails, so a script sees the two packages
+that moved as well as the one that did not. `Error::UpgradeIncomplete` is its
+own variant rather than `Incomplete`, which is about sources and says so; both
+leave code 8.
+
+One thing the output got wrong at first and a test would not have caught,
+because it is a sentence rather than a state: with nothing upgradable *and* a
+package held back, it said "everything is already at the newest version" and
+then named a package that was not. Those are opposite things, and it now says
+"nothing could be upgraded" instead.
 
 ## M10 — Shipping
 
