@@ -32,3 +32,13 @@ use crate::error::Error;
 pub fn report(error: &Error) {
     eprintln!("spm: {error}");
 }
+
+/// Say what `create` wrote.
+///
+/// One path per line, in the order `docs/USER-GUIDE.md` shows them: the
+/// package, its metadata, and the digest. A release pipeline reads this.
+pub fn created(created: &crate::ops::create::Created) {
+    println!("{}", created.package.display());
+    println!("{}", created.metadata.display());
+    println!("{}", created.sums.display());
+}

@@ -185,6 +185,15 @@ pub enum Error {
         dependents: Vec<String>,
     },
 
+    /// A staged tree cannot be made into a package.
+    #[error("{path} cannot be packaged: {reason}")]
+    NotPackageable {
+        /// What is wrong, or where what is missing should have been.
+        path: PathBuf,
+        /// Why it cannot be packaged.
+        reason: String,
+    },
+
     /// Some of the work succeeded and some did not.
     #[error("{} of {total} sources could not be updated: {}", .failed.len(), .failed.join(", "))]
     Incomplete {
@@ -204,7 +213,7 @@ impl Error {
     pub fn exit_code(&self) -> u8 {
         match self {
             Error::Io { .. } | Error::Parse { .. } | Error::Locked { .. } => 1,
-            Error::Usage(_) => 2,
+            Error::Usage(_) | Error::NotPackageable { .. } => 2,
             Error::PackageNotFound { .. }
             | Error::SourceNotFound { .. }
             | Error::VersionNotFound { .. }
@@ -253,6 +262,13 @@ mod tests {
             ),
             (
                 Error::Usage("--all and --source cannot be used together".to_owned()),
+                2,
+            ),
+            (
+                Error::NotPackageable {
+                    path: PathBuf::from("etc/motd"),
+                    reason: "everything in a package has to be under usr/".to_owned(),
+                },
                 2,
             ),
             (

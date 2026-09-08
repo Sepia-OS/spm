@@ -10,6 +10,34 @@ once it has something to version.
 
 ### Added
 
+- Test fixtures, built by `spm create` rather than checked in — so there is one
+  implementation of the package format and the fixtures cannot drift from it.
+  Three named shapes for the steps that follow: one package that stands alone,
+  one that depends on it, and one that ships the same file so the two cannot
+  both be installed. The builder also takes versions, targets, arbitrary files
+  and a missing licence, which is what the later steps need.
+- `spm create`, and with it the command line: a staged tree and a metadata file
+  become the three things a release publishes — the package, its metadata with
+  the payload digest filled in, and a `SHA256SUMS` that `sha256sum -c` reads.
+  The package holds exactly `data.tar.gz` and `metadata.json`, the digest in
+  the packed metadata describes the payload beside it, and building the same
+  tree twice gives the same bytes. The author's own metadata file is read and
+  never written to. A version that could not be part of a filename is refused
+  here, since a version is the one identifier upstream chooses and this is
+  where one becomes a file name.
+- The refusals `create` makes: everything under `usr/`, a non-empty licence
+  under the package's own name in `usr/share/licenses/`, and no libc or dynamic
+  loader — the last using the same names the `rootfs` build already refuses in
+  every sibling package. The fourth rule, that the metadata names a package, is
+  not checked because it cannot be broken: such a metadata file does not parse.
+  Refusals carry the offending path as a value rather than a sentence.
+- The payload packer: a staged tree becomes `data.tar.gz`, hashed in the same
+  pass that writes it. The same tree gives the same archive byte for byte —
+  entries sorted, timestamps zero, everything owned by `root:root`, modes
+  normalised to 755 or 644 — so a package's digest identifies its contents and
+  not the machine or the moment that packed it. Symlinks are packed as links,
+  because `grit` ships `git -> grit` and following it would put the binary on a
+  card twice under two names.
 - The installed database, and the journal that makes an interrupted install
   recoverable. A record is written as `<name>.json.partial` listing every file
   the install will write, *before* any of them exists, and renamed into place

@@ -21,3 +21,43 @@
 //!
 //! Parsing only. A command's behaviour lives in `ops`, so that the tests can
 //! call it without going through argument parsing.
+//!
+//! `clap` handles a malformed command line itself: it prints the usage and
+//! exits 2, which is the code `docs/USER-GUIDE.md` documents for wrong usage.
+
+use std::path::PathBuf;
+
+use clap::{Args, Parser, Subcommand};
+
+/// `spm`.
+#[derive(Debug, Parser)]
+#[command(name = "spm", version, about = "The SepiaOS package manager")]
+pub struct Cli {
+    /// What to do.
+    #[command(subcommand)]
+    pub command: Command,
+}
+
+/// The commands. One variant per command in `docs/dev/ARCHITECTURE.md`; the
+/// rest arrive with the steps that implement them.
+#[derive(Debug, Subcommand)]
+pub enum Command {
+    /// Turn a staged tree into an installable package
+    Create(CreateArgs),
+}
+
+/// `spm create`.
+#[derive(Debug, Args)]
+pub struct CreateArgs {
+    /// The staged tree to pack, laid out as it will appear on the device
+    #[arg(long, value_name = "DIRECTORY")]
+    pub root: PathBuf,
+
+    /// The package's metadata
+    #[arg(long, value_name = "FILE", default_value = "metadata.json")]
+    pub metadata: PathBuf,
+
+    /// Where to write the package, its metadata and SHA256SUMS
+    #[arg(long, value_name = "DIRECTORY", default_value = ".")]
+    pub output: PathBuf,
+}
