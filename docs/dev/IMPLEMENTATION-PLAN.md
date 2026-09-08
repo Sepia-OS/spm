@@ -88,9 +88,9 @@ mapping from a result to an exit code.
 
 ---
 
-## M1 — The model
+## M1 — The model ✅
 
-### Step 4 — `Version` and its ordering
+### Step 4 — `Version` and its ordering ✅
 
 **Goal.** Upstream versions compare correctly.
 **Files.** `src/model/version.rs`.
@@ -101,8 +101,27 @@ above `1.0-rc1`; a missing component is zero, so `1.2` equals `1.2.0`.
 (the comparison a string sort gets wrong), and sorting a shuffled list of real
 SepiaOS versions — `1.2.6`, `23.1.0`, `25.07.1`, `4.4.1` — gives the expected
 order.
+**Done.** 12 tests, all four rules and both named cases. Three things the step
+did not say but the implementation had to settle:
 
-### Step 5 — Names
+- **A `Version` keeps the text it was written as and the components it compares
+  by.** `info` should show a package the way its own index spells it, so
+  `25.07.1` prints as `25.07.1` while comparing equal to `25.7.1`.
+- **`Eq` and `Hash` follow the ordering, not the text.** Two versions that
+  compare equal must hash alike or a `HashMap` keyed on one loses entries;
+  trailing zero components are dropped at parse time so that `1.2` and `1.2.0`
+  are the same key.
+- **No `FromStr`.** The only text that is not a version is empty text, and the
+  right error for it depends on where it came from — a file wants `Parse` with
+  a path, an argument wants `Usage` — so `parse` returns an `Option` and the
+  caller supplies the context.
+
+A component too long for a `u64` becomes text and therefore sorts below every
+number. That falls out of rule two rather than being chosen, and the test for
+it failed twice before the expectation was right — 20 ones fit in a `u64`, 20
+nines do not.
+
+### Step 5 — Names ✅
 
 **Goal.** `PackageName`, `SourceName`, and the `<source>/<package>` form.
 **Files.** `src/model/name.rs`.
@@ -111,8 +130,22 @@ so no command re-implements the split. Reject empty parts, whitespace, and a
 name with more than one `/`.
 **Done when.** Round-trip tests for both forms, and rejection tests for the
 malformed ones.
+**Done.** `PackageName`, `SourceName` and `PackageRef`, with 13 tests. The
+rules came out stricter than the step describes, for a reason the step does not
+mention: **a name becomes a filename** — `installed/<name>.json`,
+`index/<source>.json` — so a package called `../../etc/passwd` would be a
+package that writes wherever it likes. Refusing the traversal at the type
+boundary is cheaper than guarding every place a path is built, and it is the
+same argument the extraction rules make in Step 30.
 
-### Step 6 — `Metadata`
+Two rules follow from that: a name starts with a letter or a digit, which is
+what rules out `.`, `..` and anything that reads as a command-line option; and
+a name is lower case, because the record is a file and on a case-insensitive
+filesystem `Helix` and `helix` would be one file. `InvalidName` says which rule
+was broken and the caller decides what that amounts to — `Parse` with a path
+for a file, `Usage` for an argument — the same split `Version::parse` makes.
+
+### Step 6 — `Metadata` ✅
 
 **Goal.** A package's `metadata.json` as a type.
 **Files.** `src/model/metadata.rs`.
@@ -122,8 +155,27 @@ misspelled key in a hand-written metadata file is a mistake to report, not to
 drop silently.
 **Done when.** The example from ARCHITECTURE.md round-trips, an empty `sha256`
 is accepted (that is what an author writes), and a missing `name` is an error.
+**Done.** `Metadata`, `Dependency` and `Sha256`, with 9 tests whose fixture is
+the ARCHITECTURE.md example copied verbatim — so the parser and the
+documentation cannot drift apart without a test saying so. `serde` and
+`serde_json` are in, and with them serde implementations for `Version` and the
+name types, which validate on the way in: a name that reached a file by some
+route other than this crate is refused when it is read.
 
-### Step 7 — `Index` and `Record`
+Three things beyond the field list:
+
+- **`Sha256` is a type.** Two digests are in play and the design is blunt about
+  what confusing them costs. It also refuses upper case, since that would be a
+  second spelling of one digest and two equal digests could then fail to
+  compare equal.
+- **`sha256` is `Option<Sha256>`, written as `""` when absent.** That is what an
+  author writes and what `create` replaces, so the file format keeps one
+  spelling for "not filled in yet".
+- **`Target` was added** in `name.rs`, validated like a name. It lands in the
+  filename `create` writes, so a target that walks up a directory would put a
+  package outside the output directory.
+
+### Step 7 — `Index` and `Record` ✅
 
 **Goal.** The other two formats as types.
 **Files.** `src/model/index.rs`, `src/model/installed.rs`.
@@ -132,6 +184,23 @@ the package and `payload_sha256` for `data.tar.gz`. Do not shorten either;
 confusing them is a verification that passes while checking nothing.
 **Done when.** Both round-trip, and a test asserts an `Index` selects the
 highest version for a given target.
+**Done.** 15 tests, both fixtures taken from the examples in DESIGN.md with only
+the elisions filled in. `Index::newest` picks the highest version *for a
+target*, tested against an index whose versions are deliberately out of order
+and split across two targets. `sha256` and `payload_sha256` are separate fields
+with separate tests, including one that asserts they hold different values —
+the failure this format has to make impossible is a reader that swaps them and
+verifies nothing while appearing to.
+
+Two choices worth recording:
+
+- **`url` is text, not a checked type.** A non-`https` URL is refused by the
+  transport, where refusing costs one package; refusing it here would throw a
+  whole index away over one bad entry.
+- **`files` is `Vec<PathBuf>`, and that has a consequence.** A record is JSON,
+  so a path that is not valid UTF-8 cannot be written into one. A package
+  carrying such a path therefore cannot be recorded, which means **Step 30 has
+  to refuse one at extraction** rather than discovering it at the commit.
 
 ---
 

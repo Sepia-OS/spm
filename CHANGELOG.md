@@ -10,6 +10,36 @@ once it has something to version.
 
 ### Added
 
+- `Index` and `Record` — what a source publishes and what the device remembers.
+  An index carries two digests per version under names that cannot be mistaken
+  for one another, `sha256` for the package and `payload_sha256` for the
+  payload inside it, and `Index::newest` answers the question `install` asks:
+  the highest version *built for this target*. A record knows what it depends
+  on and whether the user asked for it, which is what `remove` and its
+  autoremove pass need. Both round-trip against the examples in the design
+  document.
+- `Metadata`, `Dependency` and `Sha256` — a package's `metadata.json` as a
+  type, read strictly: an unknown field is a misspelling to report rather than
+  a key to drop, so a hand-written file saying `dependancies` fails instead of
+  quietly installing a package with no dependencies. Its round-trip test uses
+  the example from the architecture document verbatim, so the two cannot drift
+  apart in silence. `sha256` is empty until `create` fills it, which the type
+  says by being an `Option`. Also `Target`, validated like a name because it
+  becomes part of a filename, and serde for `Version` and the name types.
+- `PackageName`, `SourceName` and `PackageRef`, which parses both `helix` and
+  `sepia/helix` so that no command re-implements the split. Names are validated
+  strictly because a name becomes a filename — an installed package is recorded
+  at `installed/<name>.json` — so a name that walks up a directory is refused
+  where a name is made, rather than guarded for wherever a path is built.
+  Lower case is required for the same reason: on a filesystem that ignores
+  case, two spellings would be one record.
+- `Version`, and the ordering upstream version numbers need. Not semver:
+  numeric components compare numerically so `25.07.1` and `25.7.1` are one
+  version, a number sorts above text so `1.0` beats `1.0-rc1`, and a missing
+  component is zero so `1.2` is `1.2.0`. A version keeps the spelling it
+  arrived with for display while comparing by its components, and `Eq` and
+  `Hash` follow the ordering rather than the text — otherwise two equal
+  versions would hash differently and a map keyed on one would lose entries.
 - A CI workflow, on every commit on every branch and every pull request against
   `main`: the licence header on every source file, `cargo fmt --check`,
   `clippy --all-targets -- -D warnings`, a build and the tests — everything

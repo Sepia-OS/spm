@@ -5,6 +5,8 @@ edition = "2024"
 description = "A package manager for the SepiaOS operating system."
 
 [dependencies]
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.151"
 thiserror = "2.0.20"
 
 # Configured here rather than on the CI command line, so that a build in a
