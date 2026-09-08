@@ -304,10 +304,16 @@ would pull `tokio` in for nothing.
 
 ## Locking and concurrency
 
-One lock file, `/var/lib/spm/lock`, taken with `flock(LOCK_EX)` by every
-command that writes and never by one that only reads. A second `spm` blocks
-with a message saying what holds it. `flock` is released by the kernel when the
-process dies, so a killed `spm` does not need a stale-lock story.
+One lock file, `/var/lib/spm/lock`, taken by every command that writes and
+never by one that only reads. A second `spm` blocks with a message saying what
+holds it — the holder writes its process id into the file once it has the lock,
+so a waiter can say what it is waiting for. The kernel releases the lock when
+the process dies, so a killed `spm` does not need a stale-lock story.
+
+`std::fs::File::lock`, stable since Rust 1.89, is what takes it. This was
+planned as `flock` through `libc`, which would have been the crate's only
+`unsafe` block and its only C dependency; std having grown the same thing means
+**the crate contains no `unsafe` at all**.
 
 Within a command there is no concurrency at all. The work is dominated by one
 download and one extraction, both sequential by nature.
@@ -347,7 +353,6 @@ container and a macOS workstation:
 | `sha2` | checksums | Pure Rust; no `libcrypto` on the target. |
 | `flate2` (`rust_backend`) | gzip | The Rust backend avoids linking `zlib`; a C dependency is the usual reason a musl cross-build stops working. |
 | `tar` | archives | Reading and writing, streaming both ways. |
-| `libc` | `flock` | One call. A crate for it would be a dependency for one call. |
 | `tempfile` | staging | Temporary files in the destination directory, cleaned up on drop. |
 | `thiserror` | errors | The enum above, without the boilerplate. |
 
