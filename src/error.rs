@@ -85,6 +85,18 @@ pub enum Error {
         name: String,
     },
 
+    /// A search found nothing.
+    ///
+    /// Its own answer rather than [`Error::PackageNotFound`], whose advice is
+    /// to run `spm search` — which is what has just happened.
+    #[error(
+        "nothing matched '{needle}' - 'spm update' fetches whatever the sources have published since the last time"
+    )]
+    NothingMatched {
+        /// What was searched for.
+        needle: String,
+    },
+
     /// No source is configured under this name.
     #[error("no source named '{name}' - 'spm list-sources' shows the configured ones")]
     SourceNotFound {
@@ -215,6 +227,7 @@ impl Error {
             Error::Io { .. } | Error::Parse { .. } | Error::Locked { .. } => 1,
             Error::Usage(_) | Error::NotPackageable { .. } => 2,
             Error::PackageNotFound { .. }
+            | Error::NothingMatched { .. }
             | Error::SourceNotFound { .. }
             | Error::VersionNotFound { .. }
             | Error::TargetNotAvailable { .. } => 3,
@@ -280,6 +293,12 @@ mod tests {
             (
                 Error::SourceNotFound {
                     name: "sepia".to_owned(),
+                },
+                3,
+            ),
+            (
+                Error::NothingMatched {
+                    needle: "hel".to_owned(),
                 },
                 3,
             ),

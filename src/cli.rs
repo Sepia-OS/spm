@@ -42,6 +42,18 @@ pub struct Cli {
 /// rest arrive with the steps that implement them.
 #[derive(Debug, Subcommand)]
 pub enum Command {
+    /// Fetch the package indexes from the configured sources
+    Update(UpdateArgs),
+
+    /// Search the indexes for a package
+    Search(SearchArgs),
+
+    /// Show everything known about a package
+    Info(InfoArgs),
+
+    /// List packages
+    List(ListArgs),
+
     /// List the configured package sources
     ListSources,
 
@@ -56,6 +68,50 @@ pub enum Command {
 
     /// Turn a staged tree into an installable package
     Create(CreateArgs),
+}
+
+/// `spm update`.
+#[derive(Debug, Args)]
+pub struct UpdateArgs {
+    /// Update every source. This is what happens when neither option is given
+    #[arg(long, conflicts_with = "source")]
+    pub all: bool,
+
+    /// Update only this source
+    #[arg(long, value_name = "NAME")]
+    pub source: Option<String>,
+}
+
+/// `spm search`.
+#[derive(Debug, Args)]
+pub struct SearchArgs {
+    /// Part of a package name
+    #[arg(value_name = "PACKAGE")]
+    pub needle: String,
+}
+
+/// `spm info`.
+#[derive(Debug, Args)]
+pub struct InfoArgs {
+    /// The package, as `<package>` or `<source>/<package>`
+    #[arg(value_name = "PACKAGE")]
+    pub package: String,
+
+    /// Show this version rather than the newest
+    #[arg(long, value_name = "VERSION")]
+    pub version: Option<String>,
+}
+
+/// `spm list`.
+#[derive(Debug, Args)]
+pub struct ListArgs {
+    /// Only the packages that are installed
+    #[arg(long)]
+    pub installed: bool,
+
+    /// Only the packages from this source
+    #[arg(long, value_name = "NAME")]
+    pub source: Option<String>,
 }
 
 /// `spm source-info`.

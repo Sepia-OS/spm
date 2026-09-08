@@ -192,6 +192,33 @@ macro_rules! name_type {
     };
 }
 
+impl Target {
+    /// What this device is.
+    ///
+    /// Built from the compiler's own idea of the machine, so a binary knows
+    /// what it can install without being told: `aarch64-musl` on a SepiaOS
+    /// card. On anything else it is that machine's honest answer — a
+    /// workstation says so, and is then told that a package built for a card
+    /// is not built for it, which is the truth.
+    ///
+    /// # Panics
+    ///
+    /// Never in practice: the value is built from `std::env::consts`, which
+    /// are always names this module accepts.
+    #[must_use]
+    pub fn current() -> Self {
+        let flavour = if cfg!(target_env = "musl") {
+            "musl"
+        } else if cfg!(target_env = "gnu") {
+            "gnu"
+        } else {
+            std::env::consts::OS
+        };
+        Target::parse(&format!("{}-{flavour}", std::env::consts::ARCH))
+            .unwrap_or_else(|_| Target(format!("{}-unknown", std::env::consts::ARCH)))
+    }
+}
+
 name_type!(PackageName, "package");
 name_type!(SourceName, "source");
 name_type!(Target, "target");

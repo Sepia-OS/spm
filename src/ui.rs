@@ -175,6 +175,122 @@ pub fn removed_source(removed: &crate::ops::source::Removed) {
     }
 }
 
+/// Say what `update` did, including what it could not do.
+pub fn updated(report: &crate::ops::update::Report) {
+    for updated in &report.updated {
+        let new = if updated.new_packages > 0 {
+            format!(" ({} new)", updated.new_packages)
+        } else {
+            String::new()
+        };
+        println!(
+            "{}: {} package{}{new}.",
+            updated.name,
+            updated.packages,
+            if updated.packages == 1 { "" } else { "s" }
+        );
+    }
+    for failure in &report.failed {
+        // To stderr: a script reading the listing should not have to sift
+        // failures out of it.
+        eprintln!(
+            "{}: could not be updated - {}",
+            failure.name, failure.message
+        );
+        eprintln!("    {}", failure.url);
+    }
+}
+
+/// Say that another `spm` holds the lock, and what is being waited for.
+pub fn waiting_for_lock(holder: Option<u32>) {
+    match holder {
+        Some(pid) => eprintln!("Waiting for another spm to finish (process {pid})..."),
+        None => eprintln!("Waiting for another spm to finish..."),
+    }
+}
+
+/// How a package has to be written: qualified when two sources offer the name.
+fn written(line: &crate::ops::query::Line) -> String {
+    if line.qualify {
+        format!("{}/{}", line.source, line.name)
+    } else {
+        line.name.to_string()
+    }
+}
+
+/// Print the results of a search or a listing.
+pub fn packages(lines: &[crate::ops::query::Line]) {
+    let width = lines
+        .iter()
+        .map(|line| written(line).len())
+        .max()
+        .unwrap_or(4);
+    for line in lines {
+        let version = match &line.newest {
+            Some(version) => version.to_string(),
+            // It exists, but not for this machine.
+            None => "-".to_owned(),
+        };
+        let installed = match &line.installed {
+            Some(have) if Some(have) == line.newest.as_ref() => "  [installed]".to_owned(),
+            Some(have) => format!("  [installed {have}]"),
+            None => String::new(),
+        };
+        println!(
+            "{:<width$}  {:<10} {:<8}{installed}",
+            written(line),
+            version,
+            line.source.as_str(),
+            width = width
+        );
+        if !line.description.is_empty() {
+            // The first line only: a description may be a paragraph.
+            let first = line.description.lines().next().unwrap_or_default();
+            println!("{:width$}  {first}", "", width = width);
+        }
+    }
+}
+
+/// Print everything known about a package, once per source that offers it.
+pub fn package_detail(details: &[crate::ops::query::Detail]) {
+    for (at, detail) in details.iter().enumerate() {
+        if at > 0 {
+            println!();
+        }
+        let name = if detail.qualify {
+            format!("{}/{}", detail.source, detail.name)
+        } else {
+            detail.name.to_string()
+        };
+        println!("Name          {name}");
+        println!("Version       {}", detail.version.version);
+        println!("Target        {}", detail.version.target);
+        println!("Source        {}", detail.source);
+        println!("Description   {}", detail.description);
+        if detail.version.dependencies.is_empty() {
+            println!("Dependencies  none");
+        } else {
+            let needs: Vec<String> = detail
+                .version
+                .dependencies
+                .iter()
+                .map(|dependency| format!("{} >= {}", dependency.name, dependency.version))
+                .collect();
+            println!("Dependencies  {}", needs.join(", "));
+        }
+        match &detail.installed {
+            Some(version) => println!("Installed     {version}"),
+            None => println!("Installed     no"),
+        }
+        let versions: Vec<String> = detail
+            .versions
+            .iter()
+            .map(std::string::ToString::to_string)
+            .collect();
+        println!("Versions      {}", versions.join(", "));
+    }
+}
+
 #[cfg(test)]
 #[allow(
     clippy::unwrap_used,
