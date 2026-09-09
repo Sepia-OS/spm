@@ -44,7 +44,7 @@ use crate::error::{Error, Result};
 use crate::layout;
 use crate::model::index::Index;
 use crate::model::metadata::{Metadata, Sha256};
-use crate::sign::{PrivateKey, PublicKey};
+use crate::sign::{self, PrivateKey, PublicKey, Signature};
 use crate::store::atomic;
 
 /// What packing produced.
@@ -1191,6 +1191,107 @@ pub fn read_key(path: &Path) -> Result<PrivateKey> {
     PrivateKey::parse(&text)
 }
 
+/// What signing a file produced.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SignedFile {
+    /// The file that was signed.
+    pub file: PathBuf,
+    /// Where the signature was written.
+    pub signature: PathBuf,
+    /// The key it was signed with, which is what a reader checks it against.
+    pub public_key: PublicKey,
+}
+
+/// Sign any file, writing the signature beside it as `<file>.sig`.
+///
+/// The counterpart to [`sign_index`], for everything that is not an index.
+/// A source publishes more than its index - `sepiaos-package-index` publishes a
+/// `source.json` saying what it is called and which key to pin - and until this
+/// existed there was nothing to sign those with, because `sign_index` parses
+/// its input and refuses anything that is not an index.
+///
+/// **The signature is under its own context**, so it can never be mistaken for
+/// an index signature by anything that verifies. That is not a formality: a
+/// shared context would let a source be made to publish an index it never
+/// signed, by handing over a file it did.
+///
+/// Nothing is parsed here, because nothing is assumed about the file. The bytes
+/// on disk are signed exactly as they are, for the same reason an index's are -
+/// whoever checks it has the bytes they were given.
+///
+/// # Errors
+///
+/// [`Error::Io`] if the file or the key cannot be read, or the signature cannot
+/// be written; [`Error::Signing`] if the key is not one.
+pub fn sign_file(file: &Path, key: &Path) -> Result<SignedFile> {
+    let signer = read_key(key)?;
+
+    let bytes = fs::read(file).map_err(|source| Error::Io {
+        path: file.to_path_buf(),
+        source,
+    })?;
+
+    let signature = signer.sign_file(&bytes);
+    let out = signature_path(file);
+    atomic::write(&out, format!("{signature}\n").as_bytes())?;
+
+    Ok(SignedFile {
+        file: file.to_path_buf(),
+        signature: out,
+        public_key: signer.public(),
+    })
+}
+
+/// Check a file against the signature written beside it.
+///
+/// Reads `<file>.sig`, so it checks what was published rather than what a
+/// caller thought was published.
+///
+/// # Errors
+///
+/// [`Error::Io`] if the file or its signature cannot be read,
+/// [`Error::Signing`] if the key given is not a public key or the signature
+/// file does not hold one, and [`Error::BadSignature`] if it does not verify.
+pub fn verify_file_signature(file: &Path, key: &str) -> Result<PublicKey> {
+    let key = PublicKey::parse(key).ok_or_else(|| {
+        Error::Signing(format!(
+            "'{key}' is not a public key: {} lower-case hexadecimal characters",
+            PublicKey::BYTES * 2
+        ))
+    })?;
+
+    let bytes = fs::read(file).map_err(|source| Error::Io {
+        path: file.to_path_buf(),
+        source,
+    })?;
+
+    let signature_file = signature_path(file);
+    let text = fs::read_to_string(&signature_file).map_err(|source| Error::Io {
+        path: signature_file.clone(),
+        source,
+    })?;
+    let signature = Signature::parse(text.trim()).ok_or_else(|| {
+        Error::Signing(format!(
+            "{} does not hold an Ed25519 signature",
+            signature_file.display()
+        ))
+    })?;
+
+    sign::verify_file(&key, &signature, &bytes, &file.display().to_string())?;
+    Ok(key)
+}
+
+/// Where a signature goes: beside what it covers, with `.sig` appended.
+///
+/// Appended to the whole name rather than substituted for the extension, so
+/// that the URL a device fetches is the index's URL with `.sig` on the end -
+/// which is exactly how `ops::source::fetch_index` looks for it.
+fn signature_path(file: &Path) -> PathBuf {
+    let mut out = file.as_os_str().to_owned();
+    out.push(".sig");
+    PathBuf::from(out)
+}
+
 /// What signing an index produced.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SignedIndex {
@@ -1228,9 +1329,7 @@ pub fn sign_index(index: &Path, key: &Path) -> Result<SignedIndex> {
     })?;
 
     let signature = signer.sign_index(&bytes);
-    let mut out = index.as_os_str().to_owned();
-    out.push(".sig");
-    let out = PathBuf::from(out);
+    let out = signature_path(index);
     atomic::write(&out, format!("{signature}\n").as_bytes())?;
 
     Ok(SignedIndex {

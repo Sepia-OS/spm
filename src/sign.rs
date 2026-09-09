@@ -76,6 +76,19 @@ const PACKAGE_CONTEXT: &str = "spm-package-v1";
 /// The same, for an index.
 const INDEX_CONTEXT: &str = "spm-index-v1";
 
+/// The same, for a file that is neither.
+///
+/// `sign-index` will only sign an index - it parses first - so a source that
+/// wants to publish anything else beside its index had nothing to sign it with.
+/// `sepiaos-package-index` publishes a `source.json` describing itself, which
+/// is the case this exists for.
+///
+/// Its own context, and that is the whole point of having one: a signature over
+/// an arbitrary file must never verify as a signature over an index, or a
+/// source could be made to publish an index it never signed by handing over a
+/// file it did. The test below is the one that matters here.
+const FILE_CONTEXT: &str = "spm-file-v1";
+
 /// Hexadecimal, lower case, of a fixed length - the shape both types below
 /// share with [`Sha256`], and for the same reason: two spellings of one value
 /// would compare unequal while meaning the same thing.
@@ -295,6 +308,12 @@ impl PrivateKey {
     pub fn sign_index(&self, index: &[u8]) -> Signature {
         Signature(to_hex(self.pair.sign(&index_bytes(index)).as_ref()))
     }
+
+    /// Sign an arbitrary file: the bytes as they are, under their own context.
+    #[must_use]
+    pub fn sign_file(&self, file: &[u8]) -> Signature {
+        Signature(to_hex(self.pair.sign(&file_bytes(file)).as_ref()))
+    }
 }
 
 /// What a package signature is taken over.
@@ -323,6 +342,18 @@ fn index_bytes(index: &[u8]) -> Vec<u8> {
     bytes.extend_from_slice(INDEX_CONTEXT.as_bytes());
     bytes.push(b'\n');
     bytes.extend_from_slice(index);
+    bytes
+}
+
+/// What a file signature is taken over: the context, then the file verbatim.
+///
+/// Verbatim for the same reason an index is - whoever checks it has the bytes
+/// they were given, not a re-serialisation of what they parsed out of them.
+fn file_bytes(file: &[u8]) -> Vec<u8> {
+    let mut bytes = Vec::with_capacity(FILE_CONTEXT.len() + 1 + file.len());
+    bytes.extend_from_slice(FILE_CONTEXT.as_bytes());
+    bytes.push(b'\n');
+    bytes.extend_from_slice(file);
     bytes
 }
 
@@ -366,6 +397,15 @@ pub fn verify_index(
     )
 }
 
+/// Check a file's signature against a key.
+///
+/// # Errors
+///
+/// [`Error::BadSignature`] naming the file, if it does not verify.
+pub fn verify_file(key: &PublicKey, signature: &Signature, file: &[u8], what: &str) -> Result<()> {
+    verify(key, signature, &file_bytes(file), what)
+}
+
 /// The one place a signature is actually checked.
 fn verify(key: &PublicKey, signature: &Signature, message: &[u8], what: &str) -> Result<()> {
     signature::UnparsedPublicKey::new(&signature::ED25519, key.bytes())
@@ -383,6 +423,63 @@ fn verify(key: &PublicKey, signature: &Signature, message: &[u8], what: &str) ->
     reason = "everything here is test code, and a test that cannot fail loudly is worse"
 )]
 mod tests {
+
+    #[test]
+    fn a_file_signature_verifies_and_a_changed_file_does_not() {
+        let key = key();
+        let file = br#"{"name":"sepiaos","public_key":"ab"}"#;
+        let signature = key.sign_file(file);
+
+        verify_file(&key.public(), &signature, file, "source.json")
+            .expect("the bytes that were signed");
+
+        let tampered = br#"{"name":"sepiaos","public_key":"cd"}"#;
+        assert!(
+            verify_file(&key.public(), &signature, tampered, "source.json").is_err(),
+            "one byte of a source descriptor is the key somebody would pin"
+        );
+    }
+
+    #[test]
+    fn another_key_does_not_verify_a_file() {
+        let mine = key();
+        let theirs = key();
+        let file = b"whatever";
+        let signature = mine.sign_file(file);
+        assert!(verify_file(&theirs.public(), &signature, file, "x").is_err());
+    }
+
+    #[test]
+    fn a_file_signature_is_not_an_index_signature() {
+        // The reason `sign` has a context of its own. Without one, a source
+        // could be made to publish an index it never signed: sign any bytes as
+        // a "file", hand them over as an index, and the same signature would
+        // check out. Both directions, because either would be the same bug.
+        let key = key();
+        let bytes = br#"{"name":"sepiaos","updated":1,"packages":[]}"#;
+
+        let as_file = key.sign_file(bytes);
+        assert!(
+            verify_index(&key.public(), &as_file, bytes, "sepiaos").is_err(),
+            "a file signature must not verify as an index signature"
+        );
+
+        let as_index = key.sign_index(bytes);
+        assert!(
+            verify_file(&key.public(), &as_index, bytes, "source.json").is_err(),
+            "an index signature must not verify as a file signature"
+        );
+    }
+
+    #[test]
+    fn an_empty_file_still_signs() {
+        // Not a curiosity: it is what a zero-length publish would produce, and
+        // it must verify honestly rather than by accident of an empty message.
+        let key = key();
+        let signature = key.sign_file(b"");
+        verify_file(&key.public(), &signature, b"", "empty").unwrap();
+        assert!(verify_file(&key.public(), &signature, b"x", "empty").is_err());
+    }
     use super::*;
 
     fn key() -> PrivateKey {

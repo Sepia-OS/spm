@@ -291,5 +291,17 @@ fn run() -> Result<()> {
             ui::signed_index(&signed);
             Ok(())
         }
+
+        Command::Sign(args) => {
+            let signed = ops::create::sign_file(&args.file, &args.key)?;
+            ui::signed_file(&signed);
+            Ok(())
+        }
+
+        Command::VerifySignature(args) => {
+            let key = ops::create::verify_file_signature(&args.file, &args.key)?;
+            ui::verified_file(&args.file, &key);
+            Ok(())
+        }
     }
 }

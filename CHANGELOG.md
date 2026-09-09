@@ -10,6 +10,20 @@ once it has something to version.
 
 ### Added
 
+- **`spm sign` and `spm verify-signature`**: a detached signature over any file,
+  and the check for one. `sign-index` parses its input and refuses what is not
+  an index - right for an index, and it left a source with nothing to sign the
+  rest of what it publishes. `Sepia-OS/sepiaos-package-index` publishes a
+  `source.json` saying what the source is called and which key to pin, and that
+  is the case this exists for.
+- The signature is taken under a context of its own, `spm-file-v1`, and that is
+  the part worth having a test for. Sharing a context with the index would let a
+  source be made to publish an index it never signed: sign any bytes as a file,
+  hand them over as an index, and the same signature checks out. Both directions
+  are asserted - a file signature must not verify as an index signature, and an
+  index signature must not verify as a file one.
+- `verify-signature` is named apart from `verify`, which asks a different
+  question entirely: whether what is *installed* still matches its records.
 - **The release signs the package it publishes.** It was the only repository in
   the family that did not, which mattered more than it looks: an unsigned
   package is refused by a device and skipped by the index scan, so `spm` would
