@@ -109,6 +109,21 @@ pub enum Error {
         name: String,
     },
 
+    /// `verify` found files that are missing or are no longer files.
+    #[error(
+        "{files} file{} of {packages} installed package{} {} missing or no longer {}",
+        if *files == 1 { "" } else { "s" },
+        if *packages == 1 { "" } else { "s" },
+        if *files == 1 { "is" } else { "are" },
+        if *files == 1 { "a file" } else { "files" }
+    )]
+    VerifyFailed {
+        /// How many files are wrong.
+        files: usize,
+        /// How many packages they belong to.
+        packages: usize,
+    },
+
     /// No source is configured under this name, or at this URL.
     #[error("no source {} - 'spm list-sources' shows the configured ones", .reference.describe())]
     SourceNotFound {
@@ -331,7 +346,10 @@ impl Error {
             // A package carrying `../../etc/passwd` fails a check about itself,
             // which is the same class as failing its digest - and the same
             // class of thing that may mean something other than bad luck.
-            Error::Verification { .. } | Error::UnsafeEntry { .. } => 6,
+            // A file that is not what the record says is a check about the
+            // device failing, which is the same class as a digest that did not
+            // match.
+            Error::Verification { .. } | Error::UnsafeEntry { .. } | Error::VerifyFailed { .. } => 6,
             Error::FileConflict { .. }
             | Error::FileUnowned { .. }
             | Error::HasDependents { .. } => 7,
@@ -387,6 +405,13 @@ mod tests {
                     name: "helix".to_owned(),
                 },
                 3,
+            ),
+            (
+                Error::VerifyFailed {
+                    files: 3,
+                    packages: 1,
+                },
+                6,
             ),
             (
                 Error::SourceNotFound {

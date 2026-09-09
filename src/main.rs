@@ -28,8 +28,8 @@ use std::process::ExitCode;
 use clap::Parser;
 
 use spm::cli::{Cli, Command};
-use spm::error::Result;
-use spm::model::name::SourceRef;
+use spm::error::{Error, Result};
+use spm::model::name::{PackageRef, SourceRef};
 use spm::{ops, ui};
 
 fn main() -> ExitCode {
@@ -237,6 +237,28 @@ fn run() -> Result<()> {
             )?);
             Ok(())
         }
+        Command::Verify(args) => {
+            let reference = args
+                .package
+                .as_deref()
+                .map(PackageRef::parse)
+                .transpose()
+                .map_err(|invalid| Error::Usage(invalid.to_string()))?;
+            let report = ops::verify::verify(&store, reference.as_ref())?;
+            ui::verified(&report);
+            // The report is printed first and the failure raised after it, as
+            // `update` and `upgrade` do: somebody running this wants the list of
+            // what is wrong, not only the news that something is.
+            if report.is_sound() {
+                Ok(())
+            } else {
+                Err(Error::VerifyFailed {
+                    files: report.faults(),
+                    packages: report.broken().len(),
+                })
+            }
+        }
+
         Command::Create(args) => {
             let created = ops::create::create(&args.root, &args.metadata, &args.output)?;
             ui::created(&created);

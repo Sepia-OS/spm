@@ -75,6 +75,9 @@ pub enum Command {
     /// Remove a package source, without uninstalling anything
     RemoveSource(RemoveSourceArgs),
 
+    /// Re-check installed files against their records
+    Verify(VerifyArgs),
+
     /// Turn a staged tree into an installable package
     Create(CreateArgs),
 }
@@ -196,6 +199,14 @@ pub struct RemoveSourceArgs {
 }
 
 /// `spm create`.
+#[derive(Debug, Args)]
+pub struct VerifyArgs {
+    /// The package to check, or every installed one if none is given
+    #[arg(value_name = "PACKAGE")]
+    pub package: Option<String>,
+}
+
+/// The arguments `create` takes.
 #[derive(Debug, Args)]
 pub struct CreateArgs {
     /// The staged tree to pack, laid out as it will appear on the device

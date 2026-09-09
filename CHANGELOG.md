@@ -10,6 +10,24 @@ once it has something to version.
 
 ### Added
 
+- **`spm verify`**, which re-checks what is installed against the records - one
+  package or the whole device. It reads the card and the records and nothing
+  else: no network, no index, nothing written, so it is safe to run at any time.
+- A missing file and a directory standing where a file should be are faults, and
+  the command names them rather than counting them, because a path is something
+  you can act on and a tally is not. It exits 6, the verification code, when it
+  finds any.
+- **An edited configuration file is reported and is not a fault.** It is the
+  expected result of administering a device, and a `verify` that failed because
+  somebody had configured their card is one nobody would run twice. It is also
+  the only way to find out which files you have changed.
+- What `verify` does not prove is that a file's *contents* are right: a record
+  carries a digest for configuration and nothing else, so a corrupted binary
+  under `usr/` looks present and correct. Recording a digest for every installed
+  file would close that, at some eleven thousand entries for a package the size
+  of Helix - a decision about the record format, kept out of this command and
+  written down in the design instead.
+
 - **`remove-source` and `source-info` take a source's name**, not only its URL.
   They were the last commands in the set that made you type a URL where
   everything else takes a name, and pasting an index URL to ask about a source

@@ -75,6 +75,7 @@ src/
     resolve.rs      names to candidates; dependency resolution
     update.rs       fetch and replace indexes
     install.rs      plan, verify, unpack, record
+    verify.rs       re-check what is installed against the records
     remove.rs       reverse-record, autoremove
     upgrade.rs      compute the set, then reuse install
     create.rs       pack a staged tree into a package
@@ -503,5 +504,9 @@ What `spm` trusts, and what it does not:
   network; it does not protect the device from a source that has been taken
   over. Signing the index, and pinning a key per source in `sources.json`, is
   the obvious next layer.
-- **There is no `verify` command** to re-check installed files against their
-  records. The data to do it is already there.
+- **`verify` checks presence and kind, not contents.** A record carries a digest
+  for configuration files only, so nothing can tell a corrupted binary from a
+  sound one. Recording a digest per installed file would close that, at roughly
+  eleven thousand entries for a package the size of Helix; whether a device
+  should spend that on its card is the open question, not whether the check is
+  worth having.

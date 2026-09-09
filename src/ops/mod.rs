@@ -30,3 +30,4 @@ pub mod resolve;
 pub mod source;
 pub mod update;
 pub mod upgrade;
+pub mod verify;

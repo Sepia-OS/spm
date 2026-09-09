@@ -275,6 +275,54 @@ llvm-runtime  23.1.0    sepia
 Without `--installed`, `list` shows everything every source offers, marking
 what is installed. `--source <name>` narrows it to one source.
 
+## Checking a device
+
+`spm verify` re-reads what is on the card and compares it against the records:
+
+```console
+$ spm verify
+  helix     25.07.1   412 files, all present
+  grit      0.5.0     38 files, all present
+Everything installed is present and is what the records say.
+```
+
+It touches the network for nothing and writes nothing, so it is safe to run at
+any time. Give it a package name to check just that one.
+
+When something is wrong it names the files, because a count is not something you
+can act on:
+
+```console
+$ spm verify
+  helix     25.07.1   412 files, 1 missing or not a file
+      /usr/bin/hx  - missing
+spm: 1 file of 1 installed package is missing or no longer a file
+$ echo $?
+6
+```
+
+A file goes missing when something took it — a hand, an operation that did not
+finish, a card that lost a block. Reinstalling the package puts it back.
+
+**An edited configuration file is not a fault**, and `verify` says so rather than
+failing:
+
+```console
+$ spm verify
+  helix     25.07.1   412 files, 1 edited
+      /etc/helix.conf  - edited since it was installed
+Everything installed is present. 1 configuration file is edited, which is not a fault.
+```
+
+That is the expected result of configuring a device, and `verify` is the only
+command that will tell you which files you have changed.
+
+**What `verify` cannot tell you is whether a file's contents are still right.**
+`spm` records a checksum for configuration files and for nothing else, so a
+program under `/usr` that was quietly corrupted looks present and correct here.
+If you suspect that, reinstall the package: the download is checked against two
+checksums before anything is unpacked.
+
 ## Managing sources
 
 ```console
