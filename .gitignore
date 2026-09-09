@@ -149,3 +149,8 @@ rust-project.json
 
 
 # End of https://www.toptal.com/developers/gitignore/api/macos,linux,rust,rust-analyzer,c,c++
+# What the release builds on its way to the assets: the staged tree `spm create`
+# packs, and the package, metadata and SHA256SUMS it writes. Both are rebuilt
+# from the binary and metadata.json every time, so neither is worth keeping.
+stage/
+dist/

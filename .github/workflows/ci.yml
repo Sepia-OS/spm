@@ -26,9 +26,15 @@ env:
   RUST_BACKTRACE: 1
 
 jobs:
-  check:
-    name: build and test
+  # ---------------------------------------------------------------------------
+  # The host half: everything that does not need a device to be true. It runs on
+  # the bare runner with whatever stable Rust it ships, because a workstation is
+  # what this half is standing in for.
+  # ---------------------------------------------------------------------------
+  host:
+    name: build and test on the host
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v5
 
@@ -101,5 +107,168 @@ jobs:
           echo "$total tests"
           if [ "$total" -eq 0 ]; then
             echo "::error::no tests were collected"
+            exit 1
+          fi
+
+  # ---------------------------------------------------------------------------
+  # The device half: the binary a card would actually run, and the suite
+  # executed on the architecture it will run on.
+  #
+  # A container rather than the bare runner, and `rust:1.98-trixie` rather than
+  # the newest Rust, because 1.98.1 is what `Sepia-OS/rust-toolchain` puts on a
+  # card - so this job builds with the oldest compiler that has to work while
+  # the host job above builds with the newest. Between them the floor and the
+  # ceiling are both checked.
+  #
+  # The image is the non-slim `rust:` variant on purpose: it carries a host C
+  # compiler. A cross-build needs one - build scripts and proc macros are
+  # compiled and run on the build machine - and a container with only the cross
+  # toolchain fails partway through a dependency with `linker `cc` not found`,
+  # which is what broke Sepia-OS/grit's first CI run.
+  # ---------------------------------------------------------------------------
+  cross:
+    name: cross-build and test on aarch64
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    container: rust:1.98-trixie
+    env:
+      TARGET: aarch64-unknown-linux-musl
+      # The Linux-hosted musl toolchain the sibling repositories already use.
+      # messense, the macOS one named in .cargo/config.toml, publishes no
+      # Linux build - hence the overrides further down.
+      TC_VERSION: 2025.08-1
+      TC_BASE: https://toolchains.bootlin.com/downloads/releases/toolchains/aarch64/tarballs
+    steps:
+      # Before actions/checkout on purpose: without git in the container,
+      # checkout silently falls back to downloading a tarball, and a tarball is
+      # not a repository - nothing downstream that expects git history works.
+      - name: Install build tools
+        run: |
+          apt-get update -qq
+          apt-get install -y -qq --no-install-recommends \
+            git curl ca-certificates xz-utils qemu-user-static
+
+      - uses: actions/checkout@v5
+
+      # 78 MiB that never changes for a given TC_VERSION. Keyed on the version
+      # alone, so it is fetched once and then never again until it is bumped.
+      - name: Cache the cross toolchain
+        id: tc-cache
+        uses: actions/cache@v4
+        with:
+          path: /opt/cross
+          key: bootlin-aarch64-musl-${{ env.TC_VERSION }}
+
+      # Fetched as a versioned archive and checked against the digest upstream
+      # publishes beside it - not piped into a shell. A build that cannot say
+      # what it ran is not reproducible, and this one can.
+      - name: Fetch the aarch64 musl cross toolchain
+        if: steps.tc-cache.outputs.cache-hit != 'true'
+        run: |
+          archive="aarch64--musl--stable-${TC_VERSION}.tar.xz"
+          sums="aarch64--musl--stable-${TC_VERSION}.sha256"
+          mkdir -p /tmp/tc /opt/cross
+          curl -fsSL --retry 3 -o "/tmp/tc/${archive}" "${TC_BASE}/${archive}"
+          curl -fsSL --retry 3 -o "/tmp/tc/${sums}"    "${TC_BASE}/${sums}"
+          ( cd /tmp/tc && sha256sum --check --quiet "${sums}" ) || {
+            echo "::error title=Bad toolchain download::${archive} does not match upstream's digest"
+            exit 1
+          }
+          tar -xf "/tmp/tc/${archive}" -C /opt/cross --strip-components=1
+
+      # Proved before anything is built with it: it must exist, run on this
+      # host, and actually target aarch64 musl. A cross-build succeeds just as
+      # happily having produced a binary for the build host, and nothing
+      # downstream would notice until the card did.
+      - name: Prove the cross-linker
+        run: |
+          echo "/opt/cross/bin" >> "$GITHUB_PATH"
+          export PATH="/opt/cross/bin:$PATH"
+          machine="$(aarch64-linux-gcc -dumpmachine)"
+          echo "aarch64-linux-gcc targets ${machine}"
+          case "$machine" in
+            aarch64-*linux-musl*) ;;
+            *) echo "::error::the cross toolchain targets ${machine}, not aarch64 linux musl"; exit 1 ;;
+          esac
+
+      - name: Add the target
+        run: rustup target add "$TARGET"
+
+      - name: Which toolchain
+        run: |
+          rustc --version
+          cargo --version
+          qemu-aarch64-static --version | head -1
+
+      - name: Cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: cross-${{ env.TARGET }}-${{ hashFiles('Cargo.lock') }}
+          restore-keys: cross-${{ env.TARGET }}-
+
+      # .cargo/config.toml names the macOS toolchain, because that is what a
+      # workstation here has. Its [env] entries yield to the environment, and
+      # this is the environment they yield to - bootlin prefixes the same
+      # toolchain `aarch64-linux-`. Nothing in the repository is patched to
+      # build here; the file was written to be overridden exactly like this.
+      - name: Cross-build
+        env:
+          CARGO_TARGET_AARCH64_UNKNOWN_LINUX_MUSL_LINKER: aarch64-linux-gcc
+          CC_aarch64_unknown_linux_musl: aarch64-linux-gcc
+          AR_aarch64_unknown_linux_musl: aarch64-linux-ar
+        run: cargo build --release --locked --target "$TARGET"
+
+      # The acceptance test from the plan's Step 37, enforced on every commit
+      # rather than checked once by hand: no interpreter to find and no shared
+      # library to load, so a card built WITH_LLVM=0 - which has no libgcc_s -
+      # can run it. Also that it is aarch64 at all.
+      - name: It is aarch64, static, and needs nothing
+        run: |
+          bin="target/${TARGET}/release/spm"
+          test -f "$bin" || { echo "::error::the build produced no ${bin}"; exit 1; }
+          aarch64-linux-readelf -h "$bin" | grep -q AArch64 \
+            || { echo "::error::spm is not aarch64"; exit 1; }
+          if aarch64-linux-readelf -l "$bin" | grep -q INTERP; then
+            echo "::error title=Not static::spm wants an interpreter"; exit 1
+          fi
+          needed=$(aarch64-linux-readelf -d "$bin" 2>/dev/null | grep -c NEEDED || true)
+          if [ "$needed" -ne 0 ]; then
+            echo "::error title=Not static::spm needs ${needed} shared librar(y|ies)"; exit 1
+          fi
+          echo "aarch64, static, no interpreter and nothing needed ($(wc -c < "$bin") bytes)"
+
+      # The point of the whole job. A cross-build only proves the compiler was
+      # willing; running the suite on the target architecture is what proves the
+      # code. The runners are x86_64, so cargo is told to launch each target
+      # test binary through qemu-user - the suites are small and the compile
+      # dominates, so emulation costs little. (On an Apple Silicon workstation
+      # the same binaries run at native speed in a linux/arm64 container.)
+      - name: Test on aarch64
+        env:
+          CARGO_TARGET_AARCH64_UNKNOWN_LINUX_MUSL_LINKER: aarch64-linux-gcc
+          CARGO_TARGET_AARCH64_UNKNOWN_LINUX_MUSL_RUNNER: qemu-aarch64-static
+          CC_aarch64_unknown_linux_musl: aarch64-linux-gcc
+          AR_aarch64_unknown_linux_musl: aarch64-linux-ar
+        run: cargo test --locked --target "$TARGET"
+
+      # Same reasoning as the host job: `cargo test` prints one summary per test
+      # binary, so the last line is the last binary's count rather than the
+      # total. A suite that silently collected nothing would otherwise pass.
+      - name: How many tests ran on aarch64
+        if: always()
+        env:
+          CARGO_TARGET_AARCH64_UNKNOWN_LINUX_MUSL_LINKER: aarch64-linux-gcc
+          CARGO_TARGET_AARCH64_UNKNOWN_LINUX_MUSL_RUNNER: qemu-aarch64-static
+          CC_aarch64_unknown_linux_musl: aarch64-linux-gcc
+          AR_aarch64_unknown_linux_musl: aarch64-linux-ar
+        run: |
+          total=$(cargo test --locked --target "$TARGET" -- --list | grep -c ': test$')
+          echo "$total tests on aarch64"
+          if [ "$total" -eq 0 ]; then
+            echo "::error::no tests were collected for ${TARGET}"
             exit 1
           fi

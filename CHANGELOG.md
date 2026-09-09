@@ -10,6 +10,37 @@ once it has something to version.
 
 ### Added
 
+- The suite runs on the architecture it ships for. A cross-build only proves
+  the compiler was willing; CI now executes all 305 tests on `aarch64` as well
+  as on the host - under `qemu-user` on the x86_64 runners, which costs little
+  because the compile dominates. The device half builds with Rust 1.98.1, the
+  version a SepiaOS card carries, so the floor and the newest stable are both
+  checked on every commit.
+- The static-binary assertion is enforced rather than remembered: every commit
+  is checked for an `aarch64` ELF with no interpreter and no shared library, so
+  a change that quietly made `spm` need `libgcc_s` fails the build instead of
+  failing on a card built `WITH_LLVM=0`.
+- A release workflow. Manual dispatch with a version, which is branched from
+  `main` into `rel-<version>` and built there, so the released commit still
+  exists after `main` moves on. It refuses a commit CI has not passed, refuses
+  a version already released, and **reuses** an existing release branch rather
+  than refusing it - a run that failed after stamping the version is retried by
+  dispatching it again, with nothing to delete by hand.
+- The version is no longer a placeholder at release time: `0.1.0-replace-me` is
+  written into `Cargo.toml`, `Cargo.lock` and `metadata.json` together, and the
+  built binary is then asked what it thinks its version is. A stamp that did not
+  reach the artifact fails the release rather than shipping.
+- **`spm` ships as a package, made by `spm`.** The release stages the tree as it
+  appears on a device - the binary under `usr/bin`, the licence under
+  `usr/share/licenses/spm/` - and runs `spm create` on it using the very binary
+  being packaged. The package manager is therefore packaged like everything
+  else it installs, and the release is the first exercise of `create` on a real
+  tree rather than a fixture.
+- Releases carry four assets: the package, its `metadata.json` for a source's
+  scan to read without downloading anything, `SHA256SUMS` covering both, and the
+  bare binary - because a device with no `spm` on it cannot install one with
+  `spm`.
+
 - `spm` cross-builds for a device:
   `cargo build --release --locked --target aarch64-unknown-linux-musl` produces
   a **static** `aarch64` binary that needs no interpreter and no shared library

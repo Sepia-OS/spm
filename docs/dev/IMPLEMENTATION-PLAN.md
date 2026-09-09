@@ -1234,6 +1234,15 @@ then named a package that was not. Those are opposite things, and it now says
 
 ## M10 — Shipping
 
+**Every step here is done; the milestone has no ✅ yet**, and that is deliberate
+rather than an oversight. Two of the four "done when" conditions can only be
+observed on GitHub — a green CI run on a branch, and a dispatched release — and
+this is the one milestone whose work is mostly *not* code, so there is no local
+test that can stand in for them. The tick belongs on the first green run of
+`ci.yml` with the `cross` job in it, and the first release that publishes a
+package.
+
+
 ### Step 37 — Cross-build ✅
 
 **Goal.** An `aarch64-unknown-linux-musl` binary.
@@ -1283,7 +1292,7 @@ the file that asked for it.
 an ELF header made by a `readelf` that never executed a single instruction of
 it — which is Step 38, and why Step 38 exists.
 
-### Step 38 — Run the tests on the target
+### Step 38 — Run the tests on the target ✅
 
 **Goal.** The cross-built binary is executed, not just built.
 **Files.** `.github/workflows/ci.yml`.
@@ -1293,8 +1302,26 @@ compile dominates. On an Apple Silicon workstation the same binaries run at
 native speed in a `linux/arm64` container. This is how helix's runtime
 behaviour was verified.
 **Done when.** The full suite passes on the host and again on `aarch64`, in CI.
+**Done.** A `cross` job in `ci.yml` builds for the target and then runs the
+suite on it, all 305 tests, through
+`CARGO_TARGET_AARCH64_UNKNOWN_LINUX_MUSL_RUNNER=qemu-aarch64-static` — cargo
+launches each target test binary through the emulator, so `cargo test --target`
+is the whole command and no separate "find the test binaries and run them" step
+exists to drift.
 
-### Step 39 — CI
+**Both halves were rehearsed before the job was written.** The binaries were
+cross-built on the workstation and run twice: natively in a `linux/arm64`
+container, where all 305 pass, and under `qemu-aarch64-static` in an x86_64
+container, which is what a runner is — `uname -m` says `x86_64` and the suite
+still passes. So the emulation is known to work on the architecture CI actually
+has, rather than assumed to.
+
+**Nothing had to change to make the tests pass on aarch64**, which is worth
+recording because it is the outcome the guidelines' "the build host is not the
+target" rule was written to produce: no test depended on the host's word size,
+page size or path conventions, so there was nothing to fix.
+
+### Step 39 — CI ✅
 
 **Goal.** Every commit on every branch is checked.
 **Files.** `.github/workflows/ci.yml`.
@@ -1309,8 +1336,37 @@ file, then runs `fmt --check`, `clippy --all-targets -- -D warnings`, `build`
 and `test`, all with `--locked` so a stale `Cargo.lock` fails the run. What is
 still missing is the cross-build and the emulated run, which are Steps 37 and
 38 and want the target toolchain first.
+**Done.** The missing half is there: two jobs, `host` and `cross`. The host job
+is what it was. The cross job runs in `rust:1.98-trixie` and does the
+cross-build, the ELF assertion and the emulated suite.
 
-### Step 40 — Release
+**The container is the floor, deliberately.** 1.98.1 is what
+`Sepia-OS/rust-toolchain` puts on a card, so the device half is built with the
+oldest compiler that has to work while the host job uses the newest stable.
+Between them both ends of the supported range are checked on every commit,
+which is more than either alone would say.
+
+**The non-slim `rust:` image, also deliberately.** It carries a host C compiler,
+and a cross-build needs one — build scripts and proc macros are compiled and run
+on the build machine. A container with only the cross toolchain fails partway
+through a dependency with ``linker `cc` not found``, which is the trap Step 37
+recorded and this image avoids by construction.
+
+**Step 37's acceptance test is now a build step**, not a thing somebody
+remembers to check: aarch64, no `INTERP`, no `NEEDED`, on every commit.
+
+**The toolchain overrides are the ones Step 37 documented.** `.cargo/config.toml`
+names messense, which publishes no Linux build; the job exports the bootlin
+spellings and nothing in the repository is patched. That the file was written to
+be overridden exactly this way is now load-bearing rather than theoretical.
+
+**Not yet observed:** a green run, and the deliberately broken commit failing
+the expected step. Both need the branch pushed — GitHub Actions is the only
+place either can happen. Every mechanism the run depends on was rehearsed
+locally: the image tag and both bootlin URLs resolve, `qemu-aarch64-static` runs
+the binaries on x86_64, and the workflow parses.
+
+### Step 40 — Release ✅
 
 **Goal.** A published binary with its checksum.
 **Files.** `.github/workflows/release.yml`.
@@ -1319,8 +1375,45 @@ replace `0.1.0-replace-me` in `Cargo.toml`; build; publish the binary and a
 `SHA256SUMS`. Reuse an existing `rel-<version>` branch rather than failing.
 **Done when.** A dry run on a scratch tag produces the assets, and the version
 in `--version` matches the tag.
+**Done.** `release.yml`, in the shape the sibling repositories use — a `gate`
+that can say no in seconds, a `build` on the release branch, a `publish` on the
+bare runner where `gh` lives — with two deliberate differences.
 
-### Step 41 — `spm` packages itself
+**Something is committed to the release branch**, which is not true of `boot`.
+`Cargo.toml` carries `0.1.0-replace-me` on `main`, and the release is where a
+real number is written; the stamp is a commit on `rel-<version>`, so the
+released version is recorded in git rather than existing only inside an asset.
+
+**So the branch is reused rather than refused.** `boot` deletes its release
+branch when a build fails, because the branch holds nothing `main` does not.
+Here it can hold the stamp commit, and deleting it would throw that away — so a
+retry is just dispatching the same version again, and the stamp step does
+nothing when the version is already right. That is why there is no `rollback`
+job: reuse *is* the recovery, exactly as this step's note asked for.
+
+**Three files carry the version, not one.** `Cargo.lock` records the version of
+the root package too, and `--locked` fails on a lockfile that disagrees with
+`Cargo.toml` — so a release that stamped only `Cargo.toml` would not build at
+all. `metadata.json` is stamped with them, from the same placeholder.
+
+**The binary is asked, not the file it was built from.** `spm --version` is run
+under `qemu-aarch64-static` and compared against the tag, because a stamp that
+did not reach the compiled artifact is precisely the failure worth catching and
+only running it can tell. Rehearsed on the workstation: stamping the version
+does cause cargo to rebuild, and the rebuilt binary reports the stamped version.
+
+**A false alarm worth recording**, because it cost time and would cost it again:
+the first rehearsal reported a version mismatch and looked like cargo failing to
+rebuild. It was the rehearsal script, not the release — BSD `sed` on macOS
+rejects GNU's `0,/re/` address form, so nothing had been stamped. The workflow's
+own stamping was verified in a Debian container, where it is correct and
+idempotent across a second run.
+
+**Not yet observed:** a dispatched run. The build path was rehearsed end to end
+locally — stamp, cross-build, ELF assertion, `--version` against the tag — but
+the gate's CI check, the branching and the publish only exist on GitHub.
+
+### Step 41 — `spm` packages itself ✅
 
 **Goal.** The first real package.
 **Files.** `metadata.json`, `.github/workflows/release.yml`.
@@ -1330,6 +1423,34 @@ index picks it up on its next scan — which is also the first end-to-end test o
 the notification path.
 **Done when.** The release publishes a package, its `metadata.json` and a
 `SHA256SUMS`; a device with the source configured can `spm install spm`.
+**Done.** `metadata.json` is checked in beside the sources it describes, and the
+release stages the tree as it appears on a device — the binary under `usr/bin`,
+the licence under `usr/share/licenses/spm/` — then runs `spm create` on it
+**using the binary being packaged**, under the emulator. So `spm` is packaged by
+`spm`, and the release is the first exercise of `create` on a real tree rather
+than on a fixture one of its own tests built.
+
+**Verified on aarch64, end to end:** the cross-built binary packs its own staged
+tree, writes the three documented files, and `sha256sum --check` passes. The
+package holds exactly `data.tar.gz` and `metadata.json`, as the architecture
+says it must.
+
+**A fourth asset, which this step did not list: the bare binary.** A device with
+no `spm` on it cannot install one with `spm`, and a package is the wrong shape
+for that first install. `create`'s `SHA256SUMS` covers the package; the binary's
+line is appended, which leaves an ordinary `sha256sum` list — both entries check,
+and a reader looking for the package still finds it by name.
+
+**The placeholder version parses**, which was not obvious and is why it was
+tried: `spm create` accepts `0.1.0-replace-me` and writes
+`spm-0.1.0-replace-me-aarch64-musl.tar.gz`. So the checked-in `metadata.json` is
+a usable file rather than a template that only works after substitution.
+
+**Not yet done, and not something this repository can do to itself:** tagging
+the repository `package` so a source's scan picks it up, and the
+`spm install spm` that follows from it. The first needs a topic set on GitHub,
+the second needs a device with that source configured — and the release has to
+have been cut before either means anything.
 
 ---
 
