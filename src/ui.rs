@@ -396,6 +396,76 @@ fn note(step: &crate::ops::install::Step) -> String {
     }
 }
 
+/// Say what `verify` found, package by package.
+///
+/// A sound package gets one line. A package with something wrong gets its files
+/// listed underneath, because a count of faults is not something anybody can
+/// act on and a path is.
+///
+/// Edited configuration is listed too and marked as what it is, so that it is
+/// not read as damage: it is the expected result of administering a device, and
+/// this is the only command that will tell you which files they are.
+pub fn verified(report: &crate::ops::verify::Report) {
+    use crate::ops::verify::Finding;
+
+    if report.packages.is_empty() {
+        println!("Nothing is installed, so there is nothing to check.");
+        return;
+    }
+
+    let width = report
+        .packages
+        .iter()
+        .map(|package| package.name.as_str().len())
+        .max()
+        .unwrap_or(4);
+
+    for package in &report.packages {
+        let summary = if package.findings.is_empty() {
+            format!("{} files, all present", package.files)
+        } else {
+            let mut parts = Vec::new();
+            if package.faults() > 0 {
+                parts.push(format!("{} missing or not a file", package.faults()));
+            }
+            if package.edited() > 0 {
+                parts.push(format!("{} edited", package.edited()));
+            }
+            format!("{} files, {}", package.files, parts.join(", "))
+        };
+        println!(
+            "  {:<width$}  {:<10}{}",
+            package.name.as_str(),
+            package.version.to_string(),
+            summary,
+            width = width
+        );
+
+        for checked in &package.findings {
+            let what = match checked.finding {
+                Finding::Missing => "missing",
+                Finding::NotAFile => "not a file any more",
+                Finding::Edited => "edited since it was installed",
+            };
+            println!("      /{}  - {what}", checked.path.display());
+        }
+    }
+
+    if report.is_sound() {
+        // Said plainly, because "no output means fine" is a thing people have
+        // to learn and a sentence is not.
+        if report.edited() > 0 {
+            println!(
+                "Everything installed is present. {} configuration file{} edited, which is not a fault.",
+                report.edited(),
+                if report.edited() == 1 { " is" } else { "s are" }
+            );
+        } else {
+            println!("Everything installed is present and is what the records say.");
+        }
+    }
+}
+
 /// Say what a removal took away, or what it would take away.
 ///
 /// The package that was asked for first, then whatever went with it, marked so

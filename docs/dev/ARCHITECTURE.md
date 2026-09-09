@@ -338,6 +338,37 @@ A source whose index has never been fetched is reported as exactly that, rather
 than as a source offering no packages. The two look alike in a listing and mean
 opposite things, and only `update` closes the gap.
 
+### `verify [<package name>]`
+
+Re-checks what is installed against the records, for one package or for every
+one of them. It reads the card and the records and nothing else: no network, no
+index, and nothing is written.
+
+For each file a record lists, three questions:
+
+- **Is it there?** A recorded file that is gone is a fault. Something deleted
+  it — a hand, a failed operation, a card that lost a block — and the package is
+  no longer what it says it is.
+- **Is a file still what is at that path?** Records list files and symlinks,
+  never directories, so a directory standing where a recorded file should be is
+  a fault too.
+- **If it is configuration, is it still what `spm` wrote?** Reported, but **not**
+  a fault: an edited configuration file is the expected outcome of somebody
+  administering the device, and the whole point of the rules in *Configuration*.
+  `verify` is where you find out which files those are.
+
+The exit is 0 when nothing is missing and nothing is of the wrong kind, and 6 —
+the verification code — when something is. Edited configuration never fails it.
+
+**What `verify` does not prove is that a file's contents are right.** A record
+carries a digest for configuration files and for nothing else, so a binary under
+`usr/` that was silently corrupted is, as far as this can tell, present, of the
+right kind and in the right place. Catching that would mean recording a digest
+for every installed file, which for a package the size of Helix is some eleven
+thousand of them; that is a decision about the record format and what a device
+spends its card on, and it belongs in its own change rather than inside this
+command.
+
 ### `list-sources`
 
 Lists every configured source with the same information `source-info` gives for
