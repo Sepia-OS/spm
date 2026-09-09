@@ -258,7 +258,7 @@ impl<'store> Database<'store> {
             // not finish still must not take away a configuration file somebody
             // had edited before it started - the journal names what the install
             // *would* have written, and over an edited file it wrote nothing.
-            if !conffile::may_delete(self.store.root(), file, &record.config)? {
+            if !conffile::may_delete(self.store.root(), file, &record.digests)? {
                 continue;
             }
 
@@ -402,7 +402,7 @@ mod tests {
             reason: Reason::Explicit,
             installed_at: 1,
             files: files.iter().map(PathBuf::from).collect(),
-            config: BTreeMap::new(),
+            digests: BTreeMap::new(),
         }
     }
 

@@ -285,7 +285,7 @@ fn unshared(
         // The third place the same question is asked. A configuration file
         // nobody touched is a stale default and goes with the package; one
         // somebody edited is theirs, and outlives the package that brought it.
-        if conffile::may_delete(store.root(), file, &record.config)? {
+        if conffile::may_delete(store.root(), file, &record.digests)? {
             files.push(file.clone());
         } else {
             kept.push(file.clone());

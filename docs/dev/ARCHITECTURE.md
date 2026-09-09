@@ -360,14 +360,16 @@ For each file a record lists, three questions:
 The exit is 0 when nothing is missing and nothing is of the wrong kind, and 6 —
 the verification code — when something is. Edited configuration never fails it.
 
-**What `verify` does not prove is that a file's contents are right.** A record
-carries a digest for configuration files and for nothing else, so a binary under
-`usr/` that was silently corrupted is, as far as this can tell, present, of the
-right kind and in the right place. Catching that would mean recording a digest
-for every installed file, which for a package the size of Helix is some eleven
-thousand of them; that is a decision about the record format and what a device
-spends its card on, and it belongs in its own change rather than inside this
-command.
+`verify` checks contents, not only presence: a record carries the digest of
+every file as it was written, so a binary that lost a block to a tired card is
+found here rather than when somebody runs it. A symlink is checked for being
+there and for still being a link, and no further — it has no contents of its
+own, and hashing what it points at would report on somebody else's file.
+
+The same mismatch means two different things depending on where the file is, and
+that is the whole reason the two are told apart. Under `usr/` the package owns
+the file, so contents that changed underneath it are a fault. Under `etc/` the
+same change is an administrator doing their job, and is not.
 
 ### `list-sources`
 

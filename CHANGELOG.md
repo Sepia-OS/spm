@@ -10,6 +10,33 @@ once it has something to version.
 
 ### Added
 
+- **A digest for every installed file**, so `verify` checks contents and not
+  only presence. A binary that lost a block to a tired card is now found by
+  `spm verify` rather than the next time somebody runs it. A symlink has no
+  digest: it has no contents of its own, and hashing what it points at would be
+  a digest of somebody else's file.
+- The digests are taken **during** the extraction, by a writer that hashes on
+  the way past, so an install still makes one pass over a package rather than
+  two. A package is 216 MiB on an SD card and reading it back to hash it would
+  have roughly doubled what installing costs.
+- **The cost, measured rather than estimated:** 176 bytes of record per
+  installed file, of which the digest is about 121. For a package the size of
+  Helix that is about 1.9 MB of record. That is the price of telling a corrupted
+  binary from a sound one, and it was judged worth paying.
+- The same mismatch means two things, and where the file lives decides which.
+  Under `usr/` the package owns the file, so contents that changed underneath it
+  are a fault; under `etc/` the identical change is somebody administering their
+  device, and is not. `verify` reports them separately and only the first fails
+  the command.
+
+### Changed
+
+- **The installed record's `config` map is now `digests`**, and covers every
+  regular file rather than configuration alone - it was always the same fact
+  ("the bytes `spm` wrote"), and keeping two maps of the same type for it would
+  have been two names for one thing. Nothing has been released yet, so no device
+  carries a record in the old shape.
+
 - **`spm verify`**, which re-checks what is installed against the records - one
   package or the whole device. It reads the card and the records and nothing
   else: no network, no index, nothing written, so it is safe to run at any time.

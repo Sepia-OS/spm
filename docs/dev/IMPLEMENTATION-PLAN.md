@@ -1467,6 +1467,13 @@ instead. The behaviour is in [ARCHITECTURE.md](ARCHITECTURE.md) under
 *Configuration* and the mechanism in [DESIGN.md](DESIGN.md) under *Configuration
 files*.
 
+**A digest for every installed file has been done** and is no longer on this
+list. A record carries the digest of every regular file as it was written -
+taken during the extraction rather than by a second pass over the card - so
+`verify` checks contents and not only presence. The cost was measured before it
+was accepted: 176 bytes of record per file, about 1.9 MB for a package the size
+of Helix.
+
 **The `verify` command has been done** and is no longer on this list. It
 re-checks one package or the whole device against the records - present, still a
 file, and for configuration still what was written - reporting an edit as the
@@ -1484,9 +1491,3 @@ addressed by.
   not a device from a source that has been taken over. Signing, with a key
   pinned per source in `sources.json`, is the next layer and wants designing
   before it is built.
-- **A digest for every installed file.** `verify` checks that recorded files are
-  present and are still files; it cannot check their contents, because a record
-  carries a digest for configuration only. Recording one per file would catch a
-  corrupted binary, at roughly eleven thousand entries for a package the size of
-  Helix. Whether a device should spend that on its card is the question, not
-  whether the check is worth having.

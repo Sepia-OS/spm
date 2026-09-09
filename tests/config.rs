@@ -146,7 +146,7 @@ fn a_package_may_ship_a_default_under_etc() {
     // decision below.
     let record = Database::new(&store).get(&name("helix")).unwrap().unwrap();
     assert!(record.files.iter().any(|file| file == Path::new(CONF)));
-    assert!(record.config.contains_key(Path::new(CONF)));
+    assert!(record.digests.contains_key(Path::new(CONF)));
 }
 
 #[test]
