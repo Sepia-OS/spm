@@ -103,6 +103,7 @@ fn publish(store: &Store, fake: &Fake, source: &str, packages: &[&Built]) {
         name: SourceName::parse(source).unwrap(),
         url: fake.url_for(&format!("{source}/index.json")),
         is_default: false,
+        key: support::test_public_key(),
     });
     sources.save(store).unwrap();
 
@@ -293,6 +294,8 @@ fn a_file_two_records_claim_survives_the_first_of_them_going() {
                 description: String::new(),
                 dependencies: Vec::new(),
                 sha256: None,
+                public_key: None,
+                signature: None,
             },
             source: SourceName::parse("sepia").unwrap(),
             reason: Reason::Explicit,
@@ -503,6 +506,8 @@ fn an_install_that_did_not_finish_is_taken_back_before_a_removal_runs() {
             description: String::new(),
             dependencies: Vec::new(),
             sha256: None,
+            public_key: None,
+            signature: None,
         },
         source: SourceName::parse("sepia").unwrap(),
         reason: Reason::Explicit,

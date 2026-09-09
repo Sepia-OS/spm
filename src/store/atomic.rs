@@ -49,6 +49,27 @@ pub fn write(path: &Path, contents: &[u8]) -> Result<()> {
     write_with(path, |file| file.write_all(contents))
 }
 
+/// Write to `path` atomically, readable by nobody but its owner.
+///
+/// For a private key, which is the only thing this program writes that is a
+/// secret. The mode is set on the temporary file *before* the rename, so the
+/// key is never briefly world-readable under its final name - a window that
+/// would be short and entirely sufficient.
+///
+/// # Errors
+///
+/// [`Error::Io`] if anything fails. The destination is untouched in that case.
+pub fn write_private(path: &Path, contents: &[u8]) -> Result<()> {
+    write_with(path, |file| {
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            file.set_permissions(fs::Permissions::from_mode(0o600))?;
+        }
+        file.write_all(contents)
+    })
+}
+
 /// Write to `path` atomically, by handing an open file to `produce`.
 ///
 /// The form to use when the content is not already a slice — serialising JSON

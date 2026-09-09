@@ -704,6 +704,7 @@ dependencies = [
  "clap",
  "flate2",
  "rcgen",
+ "ring",
  "rustix",
  "rustls",
  "serde",

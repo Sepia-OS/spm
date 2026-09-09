@@ -10,6 +10,49 @@ once it has something to version.
 
 ### Added
 
+- **Indexes and packages are signed, and a device refuses anything that is
+  not.** The digests always protected a download from the network; they never
+  protected a device from the source itself, because every digest in an index is
+  published by that source. A source that has been taken over could serve a
+  malicious package with a digest matching it perfectly. Now it would also need
+  a key it does not have.
+- **Two layers.** The index is signed by the source, with a key pinned on the
+  device by `add-source --key` and unchangeable by anything on the network. Each
+  package is signed by whoever published it, with a key that lives in that
+  repository's own secrets; the index reports which key that was, and a device
+  learns it from an index it has already verified. A package signed by any other
+  key is refused even though its signature is perfectly valid.
+- The index's signature is checked **before the index is parsed**. Deciding what
+  a document says before knowing whether to believe it would be reading an
+  attacker's instructions.
+- A package's signature covers its **identity as well as its payload** - name,
+  version, target and payload digest, bound together - so a signature cannot be
+  lifted onto a different package carrying the same files, whether as a
+  downgrade or as a package renamed to shadow another.
+- **`spm keygen`** makes a keypair, writing the private half readable only by
+  its owner and printing the public half. **`spm sign-index`** signs an index and
+  writes the signature beside it. **`spm create --sign`** signs a package as it
+  is built.
+- `spm keygen` with no `--out` puts the private key on stdout and **nothing
+  else** - the guidance and the public key both go to stderr - so
+  `spm keygen | gh secret set …` stores a key and not a key with four lines
+  appended. Found while writing the user guide, which had claimed as much before
+  it was true.
+- Ed25519, through `ring` - which was already in the tree behind `rustls` and
+  already compiled for `aarch64-musl` by the cross-build. Signatures cost no new
+  dependency and nothing new that might fail to build for a device.
+
+### Changed
+
+- **A source must now have a key.** `add-source --key` is required and
+  `sources.json` has no shape without one: a source nothing can be checked
+  against is what this whole change exists to stop. Existing configurations do
+  not carry a key, so this is a breaking change to that file - nothing has been
+  released yet, so no device has one.
+- `metadata.json` gained `public_key` and `signature`, written by
+  `create --sign` as `sha256` is - an author leaves them empty. An index entry
+  gained `public_key`, the publisher key a package must be signed with.
+
 - **A digest for every installed file**, so `verify` checks contents and not
   only presence. A binary that lost a block to a tired card is now found by
   `spm verify` rather than the next time somebody runs it. A symlink has no

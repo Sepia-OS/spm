@@ -84,6 +84,7 @@ fn publish(store: &Store, fake: &Fake, source: &str, packages: &[&Built]) {
         name: SourceName::parse(source).unwrap(),
         url: fake.url_for(&format!("{source}/index.json")),
         is_default: false,
+        key: support::test_public_key(),
     });
     sources.save(store).unwrap();
 

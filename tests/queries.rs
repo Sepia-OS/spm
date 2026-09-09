@@ -57,6 +57,7 @@ fn source_offering(store: &Store, source: &str, packages: &[&Built]) {
         name: SourceName::parse(source).unwrap(),
         url: format!("https://{source}.test/index.json"),
         is_default: false,
+        key: support::test_public_key(),
     });
     sources.save(store).unwrap();
 

@@ -59,6 +59,7 @@ fn configure(store: &Store, entries: &[(&str, &str, bool)]) {
             name: name(source),
             url: (*url).to_owned(),
             is_default: *is_default,
+            key: support::test_public_key(),
         });
     }
     sources.save(store).unwrap();
@@ -357,7 +358,7 @@ fn published(fake: &Fake, work: &Path, source: &str, at: &str) -> String {
             (&two, fake.url_for("dependent.tar.gz")),
         ],
     );
-    fake.serve(at, text.as_bytes())
+    support::serve_index(fake, at, &text, support::test_key())
 }
 
 #[test]
@@ -371,7 +372,15 @@ fn the_first_source_added_becomes_the_default() {
     let fake = Fake::serving(served.path());
     let url = published(&fake, work.path(), "sepia", "index.json");
 
-    let added = add_source(&store, &fake, &url, None, false).unwrap();
+    let added = add_source(
+        &store,
+        &fake,
+        &url,
+        &support::test_public_key(),
+        None,
+        false,
+    )
+    .unwrap();
 
     assert_eq!(
         added.name.as_str(),
@@ -393,7 +402,15 @@ fn the_index_is_fetched_so_the_source_is_usable_at_once() {
     let fake = Fake::serving(served.path());
     let url = published(&fake, work.path(), "sepia", "index.json");
 
-    add_source(&store, &fake, &url, None, false).unwrap();
+    add_source(
+        &store,
+        &fake,
+        &url,
+        &support::test_public_key(),
+        None,
+        false,
+    )
+    .unwrap();
 
     let reports = list_sources(&store).unwrap();
     let summary = reports[0].index.expect("the index should already be here");
@@ -409,8 +426,24 @@ fn re_adding_a_url_updates_its_entry_rather_than_duplicating_it() {
     let fake = Fake::serving(served.path());
     let url = published(&fake, work.path(), "sepia", "index.json");
 
-    add_source(&store, &fake, &url, None, false).unwrap();
-    let again = add_source(&store, &fake, &url, None, false).unwrap();
+    add_source(
+        &store,
+        &fake,
+        &url,
+        &support::test_public_key(),
+        None,
+        false,
+    )
+    .unwrap();
+    let again = add_source(
+        &store,
+        &fake,
+        &url,
+        &support::test_public_key(),
+        None,
+        false,
+    )
+    .unwrap();
 
     assert!(again.replaced);
     assert_eq!(list_sources(&store).unwrap().len(), 1);
@@ -427,8 +460,24 @@ fn the_default_flag_moves_to_the_source_that_asks_for_it() {
     let first = published(&fake, work.path(), "sepia", "one.json");
     let second = published(&fake, work.path(), "local", "two.json");
 
-    add_source(&store, &fake, &first, None, false).unwrap();
-    let moved = add_source(&store, &fake, &second, None, true).unwrap();
+    add_source(
+        &store,
+        &fake,
+        &first,
+        &support::test_public_key(),
+        None,
+        false,
+    )
+    .unwrap();
+    let moved = add_source(
+        &store,
+        &fake,
+        &second,
+        &support::test_public_key(),
+        None,
+        true,
+    )
+    .unwrap();
 
     assert!(moved.is_default);
     let reports = list_sources(&store).unwrap();
@@ -453,9 +502,24 @@ fn a_name_another_url_already_holds_is_refused_and_says_who_holds_it() {
     // A second source that calls itself the same thing, which it is free to.
     let second = published(&fake, work.path(), "sepia", "two.json");
 
-    add_source(&store, &fake, &first, None, false).unwrap();
+    add_source(
+        &store,
+        &fake,
+        &first,
+        &support::test_public_key(),
+        None,
+        false,
+    )
+    .unwrap();
 
-    match add_source(&store, &fake, &second, None, false) {
+    match add_source(
+        &store,
+        &fake,
+        &second,
+        &support::test_public_key(),
+        None,
+        false,
+    ) {
         Err(Error::Usage(message)) => {
             assert!(message.contains("sepia"), "{message}");
             assert!(
@@ -483,8 +547,24 @@ fn a_name_can_be_given_when_two_sources_call_themselves_the_same_thing() {
     let first = published(&fake, work.path(), "sepia", "one.json");
     let second = published(&fake, work.path(), "sepia", "two.json");
 
-    add_source(&store, &fake, &first, None, false).unwrap();
-    let renamed = add_source(&store, &fake, &second, Some("mirror"), false).unwrap();
+    add_source(
+        &store,
+        &fake,
+        &first,
+        &support::test_public_key(),
+        None,
+        false,
+    )
+    .unwrap();
+    let renamed = add_source(
+        &store,
+        &fake,
+        &second,
+        &support::test_public_key(),
+        Some("mirror"),
+        false,
+    )
+    .unwrap();
 
     assert_eq!(renamed.name.as_str(), "mirror");
     let reports = list_sources(&store).unwrap();
@@ -507,7 +587,14 @@ fn a_url_that_is_not_https_is_refused_without_being_fetched() {
     let store = store_at(device.path());
     let fake = Fake::serving(served.path());
 
-    match add_source(&store, &fake, "http://example.test/index.json", None, false) {
+    match add_source(
+        &store,
+        &fake,
+        "http://example.test/index.json",
+        &support::test_public_key(),
+        None,
+        false,
+    ) {
         Err(Error::Usage(message)) => assert!(message.contains("https"), "{message}"),
         other => panic!("expected a refusal, got {other:?}"),
     }
@@ -524,12 +611,30 @@ fn a_fetch_that_fails_leaves_the_configuration_as_it_was() {
     let store = store_at(device.path());
     let fake = Fake::serving(served.path());
     let good = published(&fake, work.path(), "sepia", "one.json");
-    add_source(&store, &fake, &good, None, false).unwrap();
+    add_source(
+        &store,
+        &fake,
+        &good,
+        &support::test_public_key(),
+        None,
+        false,
+    )
+    .unwrap();
 
     let broken = published(&fake, work.path(), "local", "two.json");
     fake.break_url(&broken);
 
-    assert!(add_source(&store, &fake, &broken, None, false).is_err());
+    assert!(
+        add_source(
+            &store,
+            &fake,
+            &broken,
+            &support::test_public_key(),
+            None,
+            false
+        )
+        .is_err()
+    );
 
     let reports = list_sources(&store).unwrap();
     assert_eq!(reports.len(), 1);
@@ -542,9 +647,24 @@ fn an_index_that_is_not_an_index_is_refused() {
     let served = tempfile::tempdir().unwrap();
     let store = store_at(device.path());
     let fake = Fake::serving(served.path());
-    let url = fake.serve("index.json", b"<html>not an index at all</html>");
+    // Signed, so that what fails is the parse rather than the signature: this
+    // test is about an index that is not one, not about a source that cannot
+    // sign.
+    let body = "<html>not an index at all</html>";
+    let url = fake.serve("index.json", body.as_bytes());
+    fake.serve(
+        "index.json.sig",
+        format!("{}\n", support::test_key().sign_index(body.as_bytes())).as_bytes(),
+    );
 
-    match add_source(&store, &fake, &url, None, false) {
+    match add_source(
+        &store,
+        &fake,
+        &url,
+        &support::test_public_key(),
+        None,
+        false,
+    ) {
         Err(Error::Parse { .. }) => {}
         other => panic!("expected a parse failure, got {other:?}"),
     }
@@ -561,7 +681,15 @@ fn removing_a_source_does_not_uninstall_anything() {
     let store = store_at(device.path());
     let fake = Fake::serving(served.path());
     let url = published(&fake, work.path(), "sepia", "index.json");
-    add_source(&store, &fake, &url, None, false).unwrap();
+    add_source(
+        &store,
+        &fake,
+        &url,
+        &support::test_public_key(),
+        None,
+        false,
+    )
+    .unwrap();
 
     let built = plain(work.path());
     installed_from(&store, &built, "sepia");
@@ -587,7 +715,15 @@ fn removing_a_source_takes_its_index_with_it() {
     let store = store_at(device.path());
     let fake = Fake::serving(served.path());
     let url = published(&fake, work.path(), "sepia", "index.json");
-    add_source(&store, &fake, &url, None, false).unwrap();
+    add_source(
+        &store,
+        &fake,
+        &url,
+        &support::test_public_key(),
+        None,
+        false,
+    )
+    .unwrap();
     assert!(store.index_file(&name("sepia")).exists());
 
     remove_source(&store, &SourceRef::parse(&url)).unwrap();
@@ -607,8 +743,24 @@ fn the_default_moves_to_the_last_source_standing() {
     let fake = Fake::serving(served.path());
     let first = published(&fake, work.path(), "sepia", "one.json");
     let second = published(&fake, work.path(), "local", "two.json");
-    add_source(&store, &fake, &first, None, true).unwrap();
-    add_source(&store, &fake, &second, None, false).unwrap();
+    add_source(
+        &store,
+        &fake,
+        &first,
+        &support::test_public_key(),
+        None,
+        true,
+    )
+    .unwrap();
+    add_source(
+        &store,
+        &fake,
+        &second,
+        &support::test_public_key(),
+        None,
+        false,
+    )
+    .unwrap();
 
     let removed = remove_source(&store, &SourceRef::parse(&first)).unwrap();
 
@@ -634,9 +786,33 @@ fn with_several_left_the_default_is_not_guessed() {
     let held = published(&fake, work.path(), "sepia", "one.json");
     let other = published(&fake, work.path(), "local", "two.json");
     let third = published(&fake, work.path(), "mirror", "three.json");
-    add_source(&store, &fake, &held, None, true).unwrap();
-    add_source(&store, &fake, &other, None, false).unwrap();
-    add_source(&store, &fake, &third, None, false).unwrap();
+    add_source(
+        &store,
+        &fake,
+        &held,
+        &support::test_public_key(),
+        None,
+        true,
+    )
+    .unwrap();
+    add_source(
+        &store,
+        &fake,
+        &other,
+        &support::test_public_key(),
+        None,
+        false,
+    )
+    .unwrap();
+    add_source(
+        &store,
+        &fake,
+        &third,
+        &support::test_public_key(),
+        None,
+        false,
+    )
+    .unwrap();
 
     let removed = remove_source(&store, &SourceRef::parse(&held)).unwrap();
 
@@ -654,7 +830,15 @@ fn removing_the_only_source_leaves_nothing_to_promote() {
     let store = store_at(device.path());
     let fake = Fake::serving(served.path());
     let url = published(&fake, work.path(), "sepia", "index.json");
-    add_source(&store, &fake, &url, None, false).unwrap();
+    add_source(
+        &store,
+        &fake,
+        &url,
+        &support::test_public_key(),
+        None,
+        false,
+    )
+    .unwrap();
 
     let removed = remove_source(&store, &SourceRef::parse(&url)).unwrap();
 
@@ -684,7 +868,15 @@ fn removing_a_source_nothing_came_from_says_zero() {
     let store = store_at(device.path());
     let fake = Fake::serving(served.path());
     let url = published(&fake, work.path(), "sepia", "index.json");
-    add_source(&store, &fake, &url, None, false).unwrap();
+    add_source(
+        &store,
+        &fake,
+        &url,
+        &support::test_public_key(),
+        None,
+        false,
+    )
+    .unwrap();
 
     assert_eq!(
         remove_source(&store, &SourceRef::parse(&url))

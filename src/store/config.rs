@@ -37,6 +37,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::error::{Error, Result};
 use crate::model::name::{SourceName, SourceRef};
+use crate::sign::PublicKey;
 use crate::store::{Store, atomic};
 
 /// One configured source.
@@ -53,6 +54,17 @@ pub struct Source {
     /// `default` in the file; `default` is a keyword in Rust.
     #[serde(rename = "default", default)]
     pub is_default: bool,
+    /// The key this source's index must be signed with.
+    ///
+    /// Pinned when the source was added, and the root of everything the device
+    /// trusts afterwards: the index verifies against this, and the publisher
+    /// keys the index carries are believed because the index did. A source that
+    /// is later taken over cannot sign an index the device will accept, because
+    /// what it lost was the server and not this key.
+    ///
+    /// Required. A source with no key is a source nothing can be checked
+    /// against, and the digests alone were never the point.
+    pub key: PublicKey,
 }
 
 /// Everything in `sources.json`.
@@ -241,7 +253,8 @@ mod tests {
     /// The example from `docs/dev/DESIGN.md`, with the URL written out.
     const DESIGN_EXAMPLE: &str = r#"{
   "sources": [
-    { "name": "sepia", "url": "https://example.test/index.json", "default": true }
+    { "name": "sepia", "url": "https://example.test/index.json", "default": true,
+      "key": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc" }
   ]
 }"#;
 
@@ -249,11 +262,19 @@ mod tests {
         SourceName::parse(text).unwrap()
     }
 
+    /// A key for the fixtures. Never verified against anything here - these
+    /// tests are about `sources.json` as a file, not about signatures - so one
+    /// constant is enough and is clearer than generating a keypair per source.
+    fn key() -> PublicKey {
+        PublicKey::parse(&"11".repeat(32)).unwrap()
+    }
+
     fn source(text: &str, url: &str, is_default: bool) -> Source {
         Source {
             name: name(text),
             url: url.to_owned(),
             is_default,
+            key: key(),
         }
     }
 
@@ -301,8 +322,8 @@ mod tests {
         let store = store_in(&directory);
         let text = r#"{
           "sources": [
-            { "name": "sepia", "url": "https://one.test/i.json" },
-            { "name": "sepia", "url": "https://two.test/i.json" }
+            { "name": "sepia", "url": "https://one.test/i.json", "key": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc" },
+            { "name": "sepia", "url": "https://two.test/i.json", "key": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc" }
           ]
         }"#;
         std::fs::create_dir_all(store.sources_file().parent().unwrap()).unwrap();
@@ -324,8 +345,8 @@ mod tests {
         let store = store_in(&directory);
         let text = r#"{
           "sources": [
-            { "name": "one", "url": "https://one.test/i.json", "default": true },
-            { "name": "two", "url": "https://two.test/i.json", "default": true }
+            { "name": "one", "url": "https://one.test/i.json", "default": true, "key": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc" },
+            { "name": "two", "url": "https://two.test/i.json", "default": true, "key": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc" }
           ]
         }"#;
         std::fs::create_dir_all(store.sources_file().parent().unwrap()).unwrap();

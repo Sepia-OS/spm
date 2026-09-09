@@ -109,6 +109,26 @@ pub enum Error {
         name: String,
     },
 
+    /// A signature did not verify.
+    ///
+    /// The one failure that means somebody may be trying something, rather than
+    /// that something went wrong: the bytes arrived intact and are not what the
+    /// key says they should be.
+    #[error(
+        "{what} is not signed by the key this device trusts - refusing it. Either the source published something it did not sign, or what arrived is not what it published"
+    )]
+    BadSignature {
+        /// What failed to verify, as a phrase that fits the sentence.
+        what: String,
+    },
+
+    /// A key could not be made, read, or used.
+    ///
+    /// About the tooling rather than about a device: `keygen` and
+    /// `create --sign` raise it, and nothing that installs ever does.
+    #[error("{0}")]
+    Signing(String),
+
     /// `verify` found files that are missing or are no longer files.
     #[error(
         "{files} file{} of {packages} installed package{} {} missing or no longer {}",
@@ -332,7 +352,9 @@ impl Error {
             | Error::Locked { .. }
             | Error::DependencyCycle { .. }
             | Error::NotEnoughSpace { .. } => 1,
-            Error::Usage(_) | Error::NotPackageable { .. } => 2,
+            // Both are about what the operator handed the tool, which is the
+            // same class as a malformed staged tree.
+            Error::Usage(_) | Error::NotPackageable { .. } | Error::Signing(_) => 2,
             Error::PackageNotFound { .. }
             | Error::NothingMatched { .. }
             | Error::SourceNotFound { .. }
@@ -349,7 +371,10 @@ impl Error {
             // A file that is not what the record says is a check about the
             // device failing, which is the same class as a digest that did not
             // match.
-            Error::Verification { .. } | Error::UnsafeEntry { .. } | Error::VerifyFailed { .. } => 6,
+            Error::Verification { .. }
+            | Error::UnsafeEntry { .. }
+            | Error::VerifyFailed { .. }
+            | Error::BadSignature { .. } => 6,
             Error::FileConflict { .. }
             | Error::FileUnowned { .. }
             | Error::HasDependents { .. } => 7,
@@ -406,6 +431,13 @@ mod tests {
                 },
                 3,
             ),
+            (
+                Error::BadSignature {
+                    what: "the index for 'sepia'".to_owned(),
+                },
+                6,
+            ),
+            (Error::Signing("no key".to_owned()), 2),
             (
                 Error::VerifyFailed {
                     files: 3,

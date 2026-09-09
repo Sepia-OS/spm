@@ -264,11 +264,16 @@ as `<source>/<package name>`. The command supports the following options:
 - `--source <name>`: Only lists the packages from the given source — all of
   them, or only the installed ones if `--installed` is also given.
 
-### `add-source <url>`
+### `add-source <url> --key <key>`
 
 Adds a source: an entry in `/etc/spm/sources.json`, and a local copy of the
 index it publishes. This command and the two below it are the alternative to
 editing that file by hand.
+
+`--key` is the public key the source's index must be signed with, and it is
+required. The index is fetched **and verified against it** before anything is
+written, so a mistyped key fails here, where nothing has been kept, rather than
+at the next `update` on a device that already trusts it.
 
 `add-source` fetches the index before it writes anything. That establishes the
 URL is a source at all, rather than a typo that would surface at the next
@@ -337,6 +342,59 @@ and how many installed packages came from it.
 A source whose index has never been fetched is reported as exactly that, rather
 than as a source offering no packages. The two look alike in a listing and mean
 opposite things, and only `update` closes the gap.
+
+### Signing
+
+Every download is checked against a digest, and always was. That protects the
+bytes from the network — but every one of those digests is published by the
+source itself, so a source that has been taken over can publish a malicious
+package and a digest that matches it perfectly. A digest says *these are the
+bytes somebody meant to send*. A signature says *and that somebody holds this
+key*.
+
+**Two layers, answering two different questions.**
+
+- **The index is signed by the source.** The key is pinned in `sources.json`
+  when the source is added, with `add-source --key`, and nothing the source does
+  afterwards can change it. This is the root of everything: the index is
+  believed because it verifies, and the rest is believed because the index said
+  so. The signature is fetched from `<index url>.sig` and checked **before the
+  index is parsed** — deciding what a document says before knowing whether to
+  believe it would be reading an attacker's instructions.
+- **A package is signed by whoever published it.** A package repository holds
+  its own key in its own secrets and signs what it releases; the index reports
+  which key that was, per version. A device learns the key from an index it has
+  already verified, then refuses any package not signed by exactly that key. A
+  package naming a key of its own choosing would be vouching for itself.
+
+**A key is required.** A source without one is a source nothing can be checked
+against, so `add-source --key` is not optional and `sources.json` has no shape
+that omits it.
+
+**What a package's signature covers is its identity as well as its payload** —
+name, version, target and the payload digest, bound together. Signing the
+payload alone would let a signature be lifted onto a different package carrying
+the same files: a downgrade, or a package renamed to shadow another.
+
+The algorithm is Ed25519, and the reason is what it did not cost: `ring` was
+already in the tree behind `rustls`, and the cross-build already compiled it for
+`aarch64-musl`. Signatures arrived with no new dependency and nothing new that
+might fail to build for a device.
+
+### `keygen`
+
+Makes an Ed25519 keypair. The private key is written to a file readable only by
+its owner, or printed for piping into whatever stores secrets; the public key is
+printed, being the thing that has to reach every device that will trust this
+source.
+
+### `sign-index <file> --key <file>`
+
+Signs an index, writing `<file>.sig` beside it. The bytes on disk are signed
+exactly as they are, because that is what a device will check — not a
+re-serialisation of what they parse to. The index is parsed first all the same,
+so that signing something that is not an index fails once, here, rather than on
+every device that fetches it.
 
 ### `verify [<package name>]`
 
@@ -440,7 +498,9 @@ beside the sources it describes:
   "dependencies": [
     { "name": "llvm-runtime", "version": "23.1.0" }
   ],
-  "sha256": ""
+  "sha256": "",
+  "public_key": "",
+  "signature": ""
 }
 ```
 

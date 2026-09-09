@@ -7,6 +7,11 @@ description = "A package manager for the SepiaOS operating system."
 [dependencies]
 clap = { version = "4.6.6", features = ["derive"] }
 flate2 = { version = "1.1.10", default-features = false, features = ["rust_backend"] }
+# Ed25519, for signatures. Already in the tree - `ureq`'s rustls pulls it in
+# and the cross-build already compiles its C and assembly - so this costs no new
+# dependency, no new C toolchain requirement, and nothing that was not already
+# proven to build for aarch64-musl.
+ring = "0.17"
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.151"
 sha2 = "0.11.0"

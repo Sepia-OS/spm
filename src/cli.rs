@@ -78,6 +78,12 @@ pub enum Command {
     /// Re-check installed files against their records
     Verify(VerifyArgs),
 
+    /// Make a signing keypair
+    Keygen(KeygenArgs),
+
+    /// Sign an index with a source's key
+    SignIndex(SignIndexArgs),
+
     /// Turn a staged tree into an installable package
     Create(CreateArgs),
 }
@@ -188,6 +194,13 @@ pub struct AddSourceArgs {
     /// Use this name rather than the one the index declares
     #[arg(long, value_name = "NAME")]
     pub name: Option<String>,
+
+    /// The public key this source's index must be signed with
+    ///
+    /// Required, and pinned: everything the device later believes about this
+    /// source is believed because its index verified against this key.
+    #[arg(long, value_name = "KEY")]
+    pub key: String,
 }
 
 /// `spm remove-source`.
@@ -199,6 +212,26 @@ pub struct RemoveSourceArgs {
 }
 
 /// `spm create`.
+#[derive(Debug, Args)]
+pub struct KeygenArgs {
+    /// Where to write the private key; it is printed to stdout if not given
+    #[arg(long, value_name = "FILE")]
+    pub out: Option<PathBuf>,
+}
+
+/// The arguments `sign-index` takes.
+#[derive(Debug, Args)]
+pub struct SignIndexArgs {
+    /// The index to sign
+    #[arg(value_name = "FILE")]
+    pub index: PathBuf,
+
+    /// The private key to sign it with, as `spm keygen` wrote it
+    #[arg(long, value_name = "FILE")]
+    pub key: PathBuf,
+}
+
+/// The arguments `verify` takes.
 #[derive(Debug, Args)]
 pub struct VerifyArgs {
     /// The package to check, or every installed one if none is given
@@ -220,4 +253,11 @@ pub struct CreateArgs {
     /// Where to write the package, its metadata and SHA256SUMS
     #[arg(long, value_name = "DIRECTORY", default_value = ".")]
     pub output: PathBuf,
+
+    /// Sign the package with this private key, as `spm keygen` wrote it
+    ///
+    /// A device will not install an unsigned package, so this is only optional
+    /// for building one to look at.
+    #[arg(long, value_name = "FILE")]
+    pub sign: Option<PathBuf>,
 }

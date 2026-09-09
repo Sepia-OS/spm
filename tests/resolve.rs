@@ -62,6 +62,7 @@ fn source_offering(store: &Store, source: &str, packages: &[&Built]) {
         name: SourceName::parse(source).unwrap(),
         url: format!("https://{source}.test/index.json"),
         is_default: false,
+        key: support::test_public_key(),
     });
     sources.save(store).unwrap();
 
@@ -296,6 +297,7 @@ fn a_source_that_has_never_been_updated_offers_nothing_yet() {
         name: SourceName::parse("sepia").unwrap(),
         url: "https://sepia.test/index.json".to_owned(),
         is_default: true,
+        key: support::test_public_key(),
     });
     sources.save(&store).unwrap();
 
