@@ -57,7 +57,8 @@ src/
     metadata.rs     Metadata: what is in a package's metadata.json
     index.rs        Index: what a source publishes
     installed.rs    Record: what is installed, its files, and why
-    name.rs         PackageName and SourceName, and <source>/<package>
+    name.rs         PackageName, SourceName, <source>/<package>, and how a
+                    source is addressed - by name or by URL
   store/
     config.rs       /etc/spm/sources.json
     db.rs           /var/lib/spm/installed/
@@ -498,9 +499,6 @@ What `spm` trusts, and what it does not:
 
 ## Open questions
 
-- **A source is addressed by URL in `add-source`, `remove-source` and
-  `source-info`, and by name everywhere else.** Accepting either where a source
-  is named would cost little and remove the one inconsistency in the CLI.
 - **Nothing signs an index.** The chain of digests protects a download from the
   network; it does not protect the device from a source that has been taken
   over. Signing the index, and pinning a key per source in `sources.json`, is

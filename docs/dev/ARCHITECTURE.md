@@ -300,7 +300,12 @@ default.
 - **A name already held by a different URL.** The source holding it is named,
   and `--name` is the way past it.
 
-### `remove-source <url>`
+### `remove-source <name|url>`
+
+Takes the name a source is configured under, or the URL it publishes at.
+Neither needs a flag: a name may hold only lower-case letters, digits, `-`, `_`,
+`.` and `+`, so a URL — which needs at least a `:` and a `/` for its scheme —
+can never be read as one.
 
 Removes a source: its entry in `/etc/spm/sources.json` and its local index copy
 under `/var/lib/spm/index/`.
@@ -317,7 +322,13 @@ exactly one source remains it becomes the default, for the same reason the
 first source added is. If several remain there is no default until one is named
 with `add-source <url> --default`, and `remove-source` says so.
 
-### `source-info <url>`
+`add-source` keeps a URL as its argument, and is not an inconsistency: a source
+that has not been added has no name to be addressed by yet. The name comes from
+the index it publishes, or from `--name`.
+
+### `source-info <name|url>`
+
+Takes a name or a URL, like `remove-source`.
 
 Shows what is known about one source: its name, its URL, whether it is the
 default, when its index was last updated, how many packages that index offers,

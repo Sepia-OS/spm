@@ -26,7 +26,7 @@
 
 use crate::error::{Error, Result};
 use crate::model::index::IndexVersion;
-use crate::model::name::{PackageName, PackageRef, SourceName, Target};
+use crate::model::name::{PackageName, PackageRef, SourceName, SourceRef, Target};
 use crate::model::version::Version;
 use crate::ops::resolve;
 use crate::store::config::Sources;
@@ -101,20 +101,22 @@ pub fn list_sources(store: &Store) -> Result<Vec<SourceReport>> {
 
 /// What is known about the source published at this URL.
 ///
-/// Addressed by URL, as `docs/dev/ARCHITECTURE.md` specifies — which is the
-/// one place in the command set where a source is not named. `list-sources` is
-/// where a user finds the URL, and the name.
+/// Addressed by the name it is configured under or by the URL it publishes at,
+/// whichever the user typed. `list-sources` shows both.
 ///
 /// # Errors
 ///
-/// [`Error::SourceNotFound`] if no configured source has that URL, or whatever
-/// reading the state gives.
-pub fn source_info(store: &Store, url: &str) -> Result<SourceReport> {
+/// [`Error::SourceNotFound`] if no configured source has that name or URL, or
+/// whatever reading the state gives.
+pub fn source_info(store: &Store, reference: &SourceRef) -> Result<SourceReport> {
     list_sources(store)?
         .into_iter()
-        .find(|report| report.url == url)
+        .find(|report| match reference {
+            SourceRef::Name(name) => &report.name == name,
+            SourceRef::Url(url) => &report.url == url,
+        })
         .ok_or_else(|| Error::SourceNotFound {
-            name: url.to_owned(),
+            reference: reference.clone(),
         })
 }
 
@@ -189,7 +191,7 @@ pub fn list(
         && Sources::load(store)?.by_name(name).is_none()
     {
         return Err(Error::SourceNotFound {
-            name: name.as_str().to_owned(),
+            reference: SourceRef::Name(name.clone()),
         });
     }
 

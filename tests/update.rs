@@ -179,7 +179,7 @@ fn naming_a_source_that_is_not_configured_says_so() {
     let fake = Fake::serving(served.path());
 
     match update(&store, &fake, &Which::One(name("nothing"))) {
-        Err(Error::SourceNotFound { name }) => assert_eq!(name, "nothing"),
+        Err(Error::SourceNotFound { reference }) => assert_eq!(reference.as_str(), "nothing"),
         other => panic!("expected SourceNotFound, got {other:?}"),
     }
 }

@@ -10,6 +10,21 @@ once it has something to version.
 
 ### Added
 
+- **`remove-source` and `source-info` take a source's name**, not only its URL.
+  They were the last commands in the set that made you type a URL where
+  everything else takes a name, and pasting an index URL to ask about a source
+  you already call `local` was busywork the tool was creating for itself.
+- Either spelling works, with no flag to say which: a source name may hold only
+  lower-case letters, digits, `-`, `_`, `.` and `+`, so a URL - which needs at
+  least a `:` and a `/` for its scheme - can never be read as a name. Every URL
+  that worked before still works, so nothing written down stops working.
+- The two failures now read as different sentences, because they are: a mistyped
+  name says "no source named 'sepiaa'" and an unconfigured URL says "no source
+  at 'https://…'". One wording for both was wrong for half the callers.
+- `add-source` still takes a URL, deliberately: a source that has not been added
+  has no name to be addressed by yet. The name comes from the index it
+  publishes, or from `--name`.
+
 - **A package can ship configuration.** `create` and the extraction rules now
   accept a top-level `etc/` beside `usr/`, so a package can carry the defaults
   it needs rather than expecting somebody to write them by hand. The rule was

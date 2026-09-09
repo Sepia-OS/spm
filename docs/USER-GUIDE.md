@@ -295,14 +295,32 @@ A source shown as `never` updated has an index that has not been fetched yet,
 which is not the same as a source offering nothing — run `spm update` and it
 will fill in.
 
-`spm source-info <url>` shows the same detail for a single source.
+`spm source-info <name|url>` shows the same detail for a single source. Either
+spelling works — the name is usually shorter, and it is what `list-sources`
+shows in the first column:
 
-To remove one:
+```console
+$ spm source-info local
+```
+
+To remove one, the same way:
+
+```console
+# spm remove-source local
+Removed source 'local'. 0 installed packages came from it.
+```
+
+The URL still works everywhere the name does, so nothing you have written down
+stops working:
 
 ```console
 # spm remove-source https://example.invalid/pkgs/index.json
 Removed source 'local'. 0 installed packages came from it.
 ```
+
+`add-source` is the one that still needs a URL, and for a plain reason: a source
+you have not added yet has no name to call it by. `spm` takes the name from the
+index the source publishes, or from `--name` if you would rather choose it.
 
 Removing a source does **not** uninstall anything. Packages installed from it
 stay exactly where they are; what they lose is upgrades, because nothing is

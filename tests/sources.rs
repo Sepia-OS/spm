@@ -39,6 +39,7 @@ use std::path::Path;
 use spm::error::Error;
 use spm::model::installed::{Reason, Record};
 use spm::model::name::SourceName;
+use spm::model::name::SourceRef;
 use spm::ops::query::{list_sources, source_info};
 use spm::ops::source::{add_source, remove_source};
 use spm::store::config::{Source, Sources};
@@ -212,10 +213,101 @@ fn one_source_can_be_asked_about_by_its_url() {
         ],
     );
 
-    let report = source_info(&store, "https://example.invalid/index.json").unwrap();
+    let report = source_info(
+        &store,
+        &SourceRef::parse("https://example.invalid/index.json"),
+    )
+    .unwrap();
 
     assert_eq!(report.name.as_str(), "local");
     assert!(!report.is_default);
+}
+
+#[test]
+fn one_source_can_be_asked_about_by_its_name() {
+    // The point of the change: every other command takes a name, and now these
+    // do too. The URL still works, which is what the test above holds down.
+    let device = tempfile::tempdir().unwrap();
+    let store = store_at(device.path());
+    configure(
+        &store,
+        &[
+            ("sepia", "https://example.test/index.json", true),
+            ("local", "https://example.invalid/index.json", false),
+        ],
+    );
+
+    let report = source_info(&store, &SourceRef::parse("local")).unwrap();
+
+    assert_eq!(report.name.as_str(), "local");
+    assert_eq!(report.url, "https://example.invalid/index.json");
+    assert!(!report.is_default);
+}
+
+#[test]
+fn a_name_and_its_url_are_two_ways_to_the_same_source() {
+    let device = tempfile::tempdir().unwrap();
+    let store = store_at(device.path());
+    configure(
+        &store,
+        &[("sepia", "https://example.test/index.json", true)],
+    );
+
+    let by_name = source_info(&store, &SourceRef::parse("sepia")).unwrap();
+    let by_url = source_info(&store, &SourceRef::parse("https://example.test/index.json")).unwrap();
+    assert_eq!(by_name, by_url);
+}
+
+#[test]
+fn asking_about_a_name_that_is_not_configured_says_named_rather_than_at() {
+    // The two failures are different sentences. A mistyped name is not a
+    // malformed URL, and saying so is the whole reason the reference is carried
+    // into the error rather than a bare string.
+    let device = tempfile::tempdir().unwrap();
+    let store = store_at(device.path());
+    configure(
+        &store,
+        &[("sepia", "https://example.test/index.json", true)],
+    );
+
+    match source_info(&store, &SourceRef::parse("sepiaa")) {
+        Err(error @ Error::SourceNotFound { .. }) => {
+            let said = error.to_string();
+            assert!(said.contains("no source named 'sepiaa'"), "{said}");
+        }
+        other => panic!("expected SourceNotFound, got {other:?}"),
+    }
+
+    match source_info(&store, &SourceRef::parse("https://nowhere.test/index.json")) {
+        Err(error @ Error::SourceNotFound { .. }) => {
+            let said = error.to_string();
+            assert!(
+                said.contains("no source at 'https://nowhere.test/index.json'"),
+                "{said}"
+            );
+        }
+        other => panic!("expected SourceNotFound, got {other:?}"),
+    }
+}
+
+#[test]
+fn a_source_can_be_removed_by_its_name() {
+    let device = tempfile::tempdir().unwrap();
+    let store = store_at(device.path());
+    configure(
+        &store,
+        &[
+            ("sepia", "https://example.test/index.json", true),
+            ("local", "https://example.invalid/index.json", false),
+        ],
+    );
+
+    let removed = remove_source(&store, &SourceRef::parse("local")).unwrap();
+
+    assert_eq!(removed.name.as_str(), "local");
+    assert!(source_info(&store, &SourceRef::parse("local")).is_err());
+    // And it took only the one it was asked for.
+    assert!(source_info(&store, &SourceRef::parse("sepia")).is_ok());
 }
 
 #[test]
@@ -227,9 +319,9 @@ fn asking_about_a_url_that_is_not_configured_says_so() {
         &[("sepia", "https://example.test/index.json", true)],
     );
 
-    match source_info(&store, "https://nowhere.test/index.json") {
-        Err(Error::SourceNotFound { name }) => {
-            assert_eq!(name, "https://nowhere.test/index.json");
+    match source_info(&store, &SourceRef::parse("https://nowhere.test/index.json")) {
+        Err(Error::SourceNotFound { reference }) => {
+            assert_eq!(reference.as_str(), "https://nowhere.test/index.json");
         }
         other => panic!("expected SourceNotFound, got {other:?}"),
     }
@@ -474,7 +566,7 @@ fn removing_a_source_does_not_uninstall_anything() {
     let built = plain(work.path());
     installed_from(&store, &built, "sepia");
 
-    let removed = remove_source(&store, &url).unwrap();
+    let removed = remove_source(&store, &SourceRef::parse(&url)).unwrap();
 
     assert_eq!(removed.name.as_str(), "sepia");
     assert_eq!(removed.losing_upgrades, 1, "it should say what it costs");
@@ -498,7 +590,7 @@ fn removing_a_source_takes_its_index_with_it() {
     add_source(&store, &fake, &url, None, false).unwrap();
     assert!(store.index_file(&name("sepia")).exists());
 
-    remove_source(&store, &url).unwrap();
+    remove_source(&store, &SourceRef::parse(&url)).unwrap();
 
     assert!(!store.index_file(&name("sepia")).exists());
     assert!(list_sources(&store).unwrap().is_empty());
@@ -518,7 +610,7 @@ fn the_default_moves_to_the_last_source_standing() {
     add_source(&store, &fake, &first, None, true).unwrap();
     add_source(&store, &fake, &second, None, false).unwrap();
 
-    let removed = remove_source(&store, &first).unwrap();
+    let removed = remove_source(&store, &SourceRef::parse(&first)).unwrap();
 
     assert_eq!(
         removed
@@ -546,7 +638,7 @@ fn with_several_left_the_default_is_not_guessed() {
     add_source(&store, &fake, &other, None, false).unwrap();
     add_source(&store, &fake, &third, None, false).unwrap();
 
-    let removed = remove_source(&store, &held).unwrap();
+    let removed = remove_source(&store, &SourceRef::parse(&held)).unwrap();
 
     assert!(removed.new_default.is_none());
     assert!(removed.without_default, "it should say there is now none");
@@ -564,7 +656,7 @@ fn removing_the_only_source_leaves_nothing_to_promote() {
     let url = published(&fake, work.path(), "sepia", "index.json");
     add_source(&store, &fake, &url, None, false).unwrap();
 
-    let removed = remove_source(&store, &url).unwrap();
+    let removed = remove_source(&store, &SourceRef::parse(&url)).unwrap();
 
     assert!(removed.new_default.is_none());
     assert!(!removed.without_default, "there is nothing to be without");
@@ -576,9 +668,9 @@ fn removing_a_source_that_is_not_configured_says_so() {
     let device = tempfile::tempdir().unwrap();
     let store = store_at(device.path());
 
-    match remove_source(&store, "https://nowhere.test/index.json") {
-        Err(Error::SourceNotFound { name }) => {
-            assert_eq!(name, "https://nowhere.test/index.json");
+    match remove_source(&store, &SourceRef::parse("https://nowhere.test/index.json")) {
+        Err(Error::SourceNotFound { reference }) => {
+            assert_eq!(reference.as_str(), "https://nowhere.test/index.json");
         }
         other => panic!("expected SourceNotFound, got {other:?}"),
     }
@@ -594,5 +686,10 @@ fn removing_a_source_nothing_came_from_says_zero() {
     let url = published(&fake, work.path(), "sepia", "index.json");
     add_source(&store, &fake, &url, None, false).unwrap();
 
-    assert_eq!(remove_source(&store, &url).unwrap().losing_upgrades, 0);
+    assert_eq!(
+        remove_source(&store, &SourceRef::parse(&url))
+            .unwrap()
+            .losing_upgrades,
+        0
+    );
 }

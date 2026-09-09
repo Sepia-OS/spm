@@ -31,7 +31,7 @@ use std::collections::VecDeque;
 use crate::error::{Error, Result};
 use crate::model::index::{IndexPackage, IndexVersion};
 use crate::model::installed::{Reason, Record};
-use crate::model::name::{PackageName, PackageRef, SourceName, Target};
+use crate::model::name::{PackageName, PackageRef, SourceName, SourceRef, Target};
 use crate::model::version::Version;
 use crate::store::config::Sources;
 use crate::store::db::Database;
@@ -127,7 +127,7 @@ pub fn find(store: &Store, reference: &PackageRef) -> Result<Found> {
     // whether it is a source at all, which is a different answer.
     if Sources::load(store)?.by_name(wanted).is_none() {
         return Err(Error::SourceNotFound {
-            name: wanted.as_str().to_owned(),
+            reference: SourceRef::Name(wanted.clone()),
         });
     }
 
