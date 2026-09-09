@@ -86,6 +86,30 @@ jobs:
           } >> "$GITHUB_OUTPUT"
           echo "Releasing v${version} from rel-${version}"
 
+      # A package a device refuses to install is not a release, and spm's own
+      # index skips an unsigned one - so this repository would be the single
+      # package missing from the index it exists to read. Asked here so that a
+      # missing secret costs ten seconds rather than a full cross-build, and
+      # asked of the secret rather than of the file it becomes, because
+      # `secrets` is not readable from inside a `run` any other way.
+      #
+      # SPM_SIGNING_KEY is an organisation secret granted by repository topic.
+      # If this fails, the repository is missing the `package` topic, or
+      # sepiaos-package-index/scripts/sync-signing-key.sh has not been run since
+      # it gained one.
+      - name: Require the signing key
+        env:
+          KEY: ${{ secrets.SPM_SIGNING_KEY }}
+        run: |
+          if [ -z "$KEY" ]; then
+            echo "::error title=No signing key::SPM_SIGNING_KEY is not set for this" \
+                 "repository, and a device will not install an unsigned package." \
+                 "Give the repository the 'package' topic, then run" \
+                 "sepiaos-package-index/scripts/sync-signing-key.sh --apply."
+            exit 1
+          fi
+          echo "SPM_SIGNING_KEY is present (${#KEY} characters)"
+
       # Resolved once, here, and then used for everything downstream: the CI
       # check, the branch and the commit named in the notes. Reading main's head
       # again later would open a window where CI was checked on one commit and
@@ -304,6 +328,18 @@ jobs:
       # package's own name - and the packaging is done by the very binary being
       # packaged, running under qemu. So the release is also the first
       # end-to-end exercise of `create` on a real tree rather than a fixture.
+      # umask before the write, not chmod after it: between a create and a chmod
+      # the key is briefly world-readable, and this runner shares nothing but
+      # the habit is worth keeping. printf rather than echo so a key that begins
+      # with a dash is written rather than parsed as an option.
+      - name: Write the signing key
+        env:
+          KEY: ${{ secrets.SPM_SIGNING_KEY }}
+        run: |
+          umask 077
+          printf '%s\n' "$KEY" > "${RUNNER_TEMP}/spm-signing.key"
+          echo "wrote $(wc -c < "${RUNNER_TEMP}/spm-signing.key") bytes"
+
       - name: Stage the tree and package it
         run: |
           rm -rf stage dist
@@ -312,8 +348,37 @@ jobs:
           chmod 755 stage/usr/bin/spm
           cp LICENSE stage/usr/share/licenses/spm/LICENSE
           qemu-aarch64-static "target/${TARGET}/release/spm" create \
-            --root stage --metadata metadata.json --output dist
+            --root stage --metadata metadata.json --output dist \
+            --sign "${RUNNER_TEMP}/spm-signing.key"
           ls -l dist
+
+      # Read back rather than trusted, because every way this can go wrong
+      # produces a package that looks perfectly fine here and is refused
+      # somewhere else. An unsigned one is skipped by the index and refused by
+      # a device; one signed with a key this repository does not publish is
+      # refused by every device that pinned the published one. `create --sign`
+      # writes public_key from whichever key actually signed, so comparing it
+      # against sepia-public.key is what turns "it signed" into "it signed with
+      # the right key".
+      - name: It is signed, with the key this repository publishes
+        run: |
+          signature=$(sed -n 's/.*"signature"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' \
+                        dist/metadata.json | head -1)
+          signed=$(sed -n 's/.*"public_key"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' \
+                     dist/metadata.json | head -1)
+          declared=$(tr -d '[:space:]' < sepia-public.key)
+
+          if [ -z "$signature" ] || [ -z "$signed" ]; then
+            echo "::error title=Unsigned::create wrote no signature into dist/metadata.json." \
+                 "A device refuses an unsigned package and the index skips it."
+            exit 1
+          fi
+          if [ "$signed" != "$declared" ]; then
+            echo "::error title=Wrong key::signed with ${signed}, but sepia-public.key" \
+                 "publishes ${declared}. Every device pins the published key."
+            exit 1
+          fi
+          echo "signed with ${signed}, which is what sepia-public.key publishes"
 
       # The bare binary ships beside the package, for anyone bringing up a card
       # that has no spm on it yet to install one with. create's SHA256SUMS
@@ -380,10 +445,14 @@ jobs:
 
           | Asset | |
           |---|---|
-          | \`${package}\` | the package, for \`spm install spm\` |
+          | \`${package}\` | the signed package, for \`spm install spm\` |
           | \`metadata.json\` | what a source's scan reads without downloading the package |
           | \`${binary}\` | the bare binary, to bring up a card that has no spm on it yet |
           | \`SHA256SUMS\` | covers both |
+
+          The package is signed with the key this repository publishes, which is
+          what lets a device accept it and what lets the index list it at all -
+          an unsigned package is skipped by the scan and refused by a card.
 
           Bringing up a device that has no \`spm\`:
 

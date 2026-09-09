@@ -8,6 +8,25 @@ once it has something to version.
 
 ## [Unreleased]
 
+### Added
+
+- **The release signs the package it publishes.** It was the only repository in
+  the family that did not, which mattered more than it looks: an unsigned
+  package is refused by a device and skipped by the index scan, so `spm` would
+  have been the single package missing from the index it exists to read. The
+  `gate` now refuses a repository with no `SPM_SIGNING_KEY`, before the
+  cross-build rather than after it, and `create` is given `--sign`.
+- The signature is **read back** rather than trusted, and compared against
+  `sepia-public.key`, which is now checked in. Every way this goes wrong
+  produces a package that looks perfectly fine in the run and is refused
+  somewhere else: unsigned is skipped by the index, and signed with a key this
+  repository does not publish is refused by every device that pinned the
+  published one. `create --sign` writes `public_key` from whichever key actually
+  signed, so comparing the two is what turns "it signed" into "it signed with
+  the right key". Both paths were exercised before committing - an unsigned
+  package leaves both fields empty, and a signed one carries a 128-character
+  signature and the matching key.
+
 ### Fixed
 
 - **The release workflow could not commit the version stamp**, which is where
