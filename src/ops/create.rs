@@ -42,7 +42,9 @@ use sha2::{Digest, Sha256 as Hasher};
 
 use crate::conffile;
 use crate::error::{Error, Result};
+use crate::model::index::Index;
 use crate::model::metadata::{Metadata, Sha256};
+use crate::sign::{PrivateKey, PublicKey};
 use crate::store::atomic;
 
 /// What packing produced.
@@ -470,6 +472,8 @@ mod tests {
             description: "The Helix editor.".to_owned(),
             dependencies: Vec::new(),
             sha256: None,
+            public_key: None,
+            signature: None,
         }
     }
 
@@ -520,7 +524,7 @@ mod tests {
         staged(&tree);
         let metadata = author_metadata(directory, "25.07.1");
         let output = directory.join("dist");
-        create(&tree, &metadata, &output).unwrap()
+        create(&tree, &metadata, &output, None).unwrap()
     }
 
     #[test]
@@ -599,7 +603,7 @@ mod tests {
         let metadata = author_metadata(directory.path(), "25.07.1");
         let before = fs::read(&metadata).unwrap();
 
-        create(&tree, &metadata, &directory.path().join("dist")).unwrap();
+        create(&tree, &metadata, &directory.path().join("dist"), None).unwrap();
 
         assert_eq!(fs::read(&metadata).unwrap(), before);
     }
@@ -629,8 +633,8 @@ mod tests {
         staged(&tree);
         let metadata = author_metadata(directory.path(), "25.07.1");
 
-        let one = create(&tree, &metadata, &directory.path().join("a")).unwrap();
-        let two = create(&tree, &metadata, &directory.path().join("b")).unwrap();
+        let one = create(&tree, &metadata, &directory.path().join("a"), None).unwrap();
+        let two = create(&tree, &metadata, &directory.path().join("b"), None).unwrap();
 
         assert_eq!(one.sha256, two.sha256);
         assert_eq!(
@@ -648,7 +652,7 @@ mod tests {
         staged(&tree);
         let metadata = author_metadata(directory.path(), "../../evil");
 
-        match create(&tree, &metadata, &directory.path().join("dist")) {
+        match create(&tree, &metadata, &directory.path().join("dist"), None) {
             Err(Error::Parse { path, message }) => {
                 assert_eq!(path, metadata);
                 assert!(message.contains("../../evil"), "{message}");
@@ -666,7 +670,7 @@ mod tests {
         let metadata = author_metadata(directory.path(), "25.07.1");
         let output = directory.path().join("dist");
 
-        assert!(create(&tree, &metadata, &output).is_err());
+        assert!(create(&tree, &metadata, &output, None).is_err());
         // And nothing was written on the way to finding out.
         assert!(!output.join("SHA256SUMS").exists());
     }
@@ -678,7 +682,7 @@ mod tests {
         staged(&tree);
         let missing = directory.path().join("nowhere.json");
 
-        match create(&tree, &missing, &directory.path().join("dist")) {
+        match create(&tree, &missing, &directory.path().join("dist"), None) {
             Err(Error::Io { path, .. }) => assert_eq!(path, missing),
             other => panic!("expected an Io error naming the file, got {other:?}"),
         }
@@ -717,7 +721,8 @@ mod tests {
 
         let metadata = author_metadata(directory.path(), "25.07.1");
         let output = directory.path().join("dist");
-        create(&tree, &metadata, &output).expect("a package may ship configuration under etc/");
+        create(&tree, &metadata, &output, None)
+            .expect("a package may ship configuration under etc/");
     }
 
     #[test]
@@ -988,7 +993,12 @@ pub struct Created {
 /// [`Error::Parse`] if the metadata cannot be read or names something that
 /// cannot be a filename, [`Error::NotPackageable`] if the tree breaks one of
 /// the rules, [`Error::Io`] if anything cannot be read or written.
-pub fn create(root: &Path, metadata_file: &Path, output: &Path) -> Result<Created> {
+pub fn create(
+    root: &Path,
+    metadata_file: &Path,
+    output: &Path,
+    signer: Option<&PrivateKey>,
+) -> Result<Created> {
     let text = fs::read_to_string(metadata_file).map_err(|source| Error::Io {
         path: metadata_file.to_path_buf(),
         source,
@@ -1019,6 +1029,22 @@ pub fn create(root: &Path, metadata_file: &Path, output: &Path) -> Result<Create
     let packed = pack_payload(root, payload.path())?;
     metadata.sha256 = Some(packed.sha256.clone());
 
+    // Signed here, between the payload's digest existing and the metadata being
+    // packed: the signature covers the package's identity and that digest, so
+    // it cannot be made before the payload and must be inside what is packed.
+    // Both halves are written, the key as well as the signature, so that a
+    // package says which key to check it with - and a device believes that only
+    // when the index it already trusts names the same one.
+    if let Some(signer) = signer {
+        metadata.signature = Some(signer.sign_package(
+            &metadata.name,
+            &metadata.version,
+            &metadata.target,
+            &packed.sha256,
+        ));
+        metadata.public_key = Some(signer.public());
+    }
+
     // The metadata that goes *inside* is the author's with the digest filled
     // in, not the file they wrote.
     let mut inner = serde_json::to_vec_pretty(&metadata).map_err(|error| Error::Parse {
@@ -1045,6 +1071,69 @@ pub fn create(root: &Path, metadata_file: &Path, output: &Path) -> Result<Create
         sums: sums_out,
         sha256: sealed.sha256,
         bytes: sealed.bytes,
+    })
+}
+
+/// Read a private key from the file `keygen` wrote.
+///
+/// # Errors
+///
+/// [`Error::Io`] if the file cannot be read, [`Error::Signing`] if what is in
+/// it is not a key.
+pub fn read_key(path: &Path) -> Result<PrivateKey> {
+    let text = fs::read_to_string(path).map_err(|source| Error::Io {
+        path: path.to_path_buf(),
+        source,
+    })?;
+    PrivateKey::parse(&text)
+}
+
+/// What signing an index produced.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SignedIndex {
+    /// The index that was signed.
+    pub index: PathBuf,
+    /// Where the signature was written.
+    pub signature: PathBuf,
+    /// The key it was signed with, which is what a device pins.
+    pub public_key: PublicKey,
+}
+
+/// Sign an index file, writing the signature beside it.
+///
+/// The bytes on disk are signed exactly as they are - not a re-serialisation of
+/// what they parse to - because that is what a device will check. It is parsed
+/// first all the same, so that signing something that is not an index fails
+/// here rather than on every device that fetches it.
+///
+/// # Errors
+///
+/// [`Error::Io`] if either file cannot be read or written, [`Error::Parse`] if
+/// the index is not one, [`Error::Signing`] if the key is not a key.
+pub fn sign_index(index: &Path, key: &Path) -> Result<SignedIndex> {
+    let signer = read_key(key)?;
+
+    let bytes = fs::read(index).map_err(|source| Error::Io {
+        path: index.to_path_buf(),
+        source,
+    })?;
+
+    // Parsed only to refuse the obvious mistake; the signature is over `bytes`.
+    serde_json::from_slice::<Index>(&bytes).map_err(|error| Error::Parse {
+        path: index.to_path_buf(),
+        message: error.to_string(),
+    })?;
+
+    let signature = signer.sign_index(&bytes);
+    let mut out = index.as_os_str().to_owned();
+    out.push(".sig");
+    let out = PathBuf::from(out);
+    atomic::write(&out, format!("{signature}\n").as_bytes())?;
+
+    Ok(SignedIndex {
+        index: index.to_path_buf(),
+        signature: out,
+        public_key: signer.public(),
     })
 }
 

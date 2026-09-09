@@ -22,7 +22,7 @@ A source is a repository that publishes an index of packages. Add one, and
 `spm` fetches its index straight away so the source is usable immediately:
 
 ```console
-# spm add-source https://sepia-os.github.io/packages/index.json
+# spm add-source https://sepia-os.github.io/packages/index.json --key <key>
 Fetched the index for 'sepia': 24 packages.
 Added source 'sepia' (default).
 ```
@@ -334,6 +334,157 @@ Reinstalling the package puts it right.
 A symlink is checked for being there and still being a link, and no further: it
 has no contents of its own.
 
+## Signing
+
+Every source has a key, and it is not optional. `spm` checks that the index it
+fetches was signed by the key you pinned when you added the source, and that
+each package was signed by the key the index names for it. Without that, a
+source that somebody else takes over can hand your device anything at all — the
+checksums would match, because whoever published the package also published the
+checksums.
+
+Adding a source therefore means having its public key:
+
+```console
+# spm add-source https://packages.sepia-os.org/index.json --key 3a7f…c21b
+```
+
+Get the key from whoever runs the source, by some route that is not the source
+itself — a key fetched from the thing it is supposed to protect protects
+nothing. If the key is wrong, `add-source` fails and nothing is written.
+
+### Making a keypair
+
+`spm keygen` makes one. There are two halves and they are treated completely
+differently, so it is worth being clear about which is which before you have
+one.
+
+```console
+$ spm keygen --out source.key
+Private key written to source.key
+Keep it where only the build that signs can reach it - a repository's
+secrets, not the repository. Anybody holding it can sign as you.
+
+Public key (this is what goes on a device, and is not a secret):
+  d10ede8cb4f30cb2a291bf1298056d5251415ef8e4015981ceba43c81228aa59
+```
+
+| | |
+|---|---|
+| **Private key** | The file it wrote. It signs. Anybody who has it can sign as you, so it never leaves the machine or the secret store that signs with it. |
+| **Public key** | The line it printed. It verifies, and only verifies. It is not a secret — it is meant to be copied about, pasted into issues, and typed onto devices. |
+
+`--out` writes the private key with permissions that let nobody but its owner
+read it (`-rw-------`), and it sets them before the file has its final name, so
+there is no moment when it is readable and shouldn't be.
+
+Without `--out` the private key goes to standard output instead, for piping
+straight into something that stores secrets without it ever touching a disk:
+
+```console
+$ spm keygen | gh secret set SPM_SIGNING_KEY
+```
+
+The guidance text goes to standard error in that form, so only the key itself
+ends up in the pipe.
+
+### Where to keep each half
+
+**The private key belongs in a secret store, not in a repository.** For a
+package built by GitHub Actions, that means a repository secret — the same place
+a token would go — read into the job that signs and nowhere else:
+
+```yaml
+- name: Sign and package
+  env:
+    SPM_SIGNING_KEY: ${{ secrets.SPM_SIGNING_KEY }}
+  run: |
+    printf '%s' "$SPM_SIGNING_KEY" > signing.key
+    spm create --root stage --sign signing.key
+    rm -f signing.key
+```
+
+Three things worth doing whatever your build system is:
+
+- **Never commit it.** A key in git history is a key you have to replace, even
+  if you delete it in the next commit.
+- **Never publish it beside what it signs.** A key served from the same place as
+  the index it protects protects nothing — anybody who can replace the index can
+  replace the key.
+- **One key per job, not one key everywhere.** A source signs indexes; a package
+  repository signs its own releases. They are different keys held by different
+  people, and that separation is the reason a source cannot quietly substitute
+  somebody's package.
+
+**The public key is the thing you have to distribute**, and how it reaches a
+device matters more than it looks. Put a source's public key in its README, its
+release notes, an announcement — anywhere that is *not* the source itself.
+Somebody adding the source types it in:
+
+```console
+# spm add-source https://packages.sepia-os.org/index.json --key d10ede…aa59
+```
+
+A package's public key goes into the index entry the source builds for it, so
+devices pick it up from an index they have already verified.
+
+### If you lose a key, or one leaks
+
+**If the private key leaks**, treat everything it signed as suspect and replace
+it. Make a new pair, sign the index again with the new key, and tell everyone
+the new public key.
+
+**If you lose the private key**, the effect is the same minus the urgency: you
+cannot sign anything more until you make a new pair.
+
+Either way, moving a source to a new key is one command on each device — the
+same `add-source`, with the new key:
+
+```console
+# spm add-source https://packages.sepia-os.org/index.json --key <new key>
+```
+
+Re-adding a URL updates the source that is already there rather than adding a
+second one, and the new key replaces the pinned one. Until a device does that it
+will refuse the newly signed index, which is the pin doing its job: a key
+changing is exactly what an attack would look like, so it takes a person to
+accept it.
+
+**If you have the private key but have mislaid the public half**, sign anything
+with it — `sign-index` prints the public key of whatever key it used:
+
+```console
+$ spm sign-index index.json --key source.key
+Signed index.json
+  signature  index.json.sig
+  public key d10ede8cb4f30cb2a291bf1298056d5251415ef8e4015981ceba43c81228aa59
+```
+
+### Running a source
+
+With a key made and stored, sign each index you publish and publish the
+signature beside it:
+
+```console
+$ spm sign-index index.json --key source.key
+```
+
+That writes `index.json.sig`. A device fetches both.
+
+### Publishing a package
+
+A package is signed by whoever built it, with its own key rather than the
+source's:
+
+```console
+$ spm create --root stage --sign package.key
+```
+
+The public half goes in the index entry the source builds for you, so a device
+knows which key to expect. A package signed by any other key is refused, even
+though its signature is perfectly valid — the index is what says who is allowed
+to sign this package.
+
 ## Managing sources
 
 ```console
@@ -391,7 +542,7 @@ One source is the default. It is used when a command needs a source and none
 was given — in particular when a package is created and published. To move it:
 
 ```console
-# spm add-source https://sepia-os.github.io/packages/index.json --default
+# spm add-source https://sepia-os.github.io/packages/index.json --key <key> --default
 ```
 
 Adding a source that is already configured updates it rather than adding it
@@ -422,7 +573,9 @@ Beside it, a `metadata.json` describing what you are packaging:
   "dependencies": [
     { "name": "llvm-runtime", "version": "23.1.0" }
   ],
-  "sha256": ""
+  "sha256": "",
+  "public_key": "",
+  "signature": ""
 }
 ```
 

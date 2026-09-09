@@ -52,6 +52,7 @@ src/
   cli.rs            the clap definitions - one struct per command
   error.rs          Error, and the exit code each variant maps to
   conffile.rs       etc/: which files are the administrator's, and when
+  sign.rs           Ed25519 keys, and the two things that are signed
   model/
     version.rs      Version and its ordering
     metadata.rs     Metadata: what is in a package's metadata.json
@@ -99,7 +100,8 @@ read them on a device with only `vi`.
 ```json
 {
   "sources": [
-    { "name": "sepia", "url": "https://…/index.json", "default": true }
+    { "name": "sepia", "url": "https://…/index.json", "default": true,
+      "key": "…" }
   ]
 }
 ```
@@ -129,6 +131,7 @@ that could differ between versions of `spm`.
           "bytes": 16148070,
           "sha256": "…",
           "payload_sha256": "…",
+          "public_key": "…",
           "dependencies": [ { "name": "llvm-runtime", "version": "23.1.0" } ]
         }
       ]
@@ -232,6 +235,59 @@ A diverted file is recorded too, under its `.spmnew` name, together with the
 file it was diverted around. Leaving the latter out of the record would hand the
 administrator's file to nobody: `remove` would never reach it and a later install
 would refuse to overwrite it.
+
+## Signing
+
+The digest chain has always protected a download from the network. It never
+protected a device from the source itself: every digest in an index is published
+by the source, so a source that has been taken over can serve a malicious
+package with a digest that matches it exactly. Signatures are the layer that
+closes it.
+
+**The chain, in the order a device walks it:**
+
+1. **A key is pinned** in `sources.json` when the source is added. A person put
+   it there; nothing on the network can change it. Required — a source with no
+   key is a source nothing can be checked against.
+2. **The index is fetched with its signature** from `<url>.sig`, and the
+   signature is checked **before the index is parsed**. Parsing first would mean
+   deciding what the document says before knowing whether to believe any of it,
+   and every field in it — which packages exist, where they are downloaded from,
+   which keys signed them — is something an unsigned index could lie about.
+3. **The index names a key per package version**: the publisher's, not the
+   source's. A package repository holds its key in its own secrets and signs
+   what it releases; the source only reports which key that was.
+4. **The package carries its own signature**, over its identity and payload
+   digest. `install` checks that the key the package names is the key the index
+   named, then that the signature verifies, and only then unpacks.
+
+**Identity is signed, not only the payload.** The signed bytes are a context
+marker, the name, the version, the target and the payload digest, one per line.
+Signing the payload alone would let a signature be lifted onto a different
+package that happened to carry the same files — a downgrade, or a package
+renamed to shadow another. The context marker differs between an index signature
+and a package signature, so one can never be presented as the other.
+
+**Signed over bytes, not over documents.** An index signature covers the bytes
+that were published, and the device verifies the bytes it received rather than a
+re-serialisation of what it parsed. Two serialisations of one JSON document
+differ in whitespace and key order while meaning the same thing, so a signature
+over the parsed form would break for reasons that are not about the index. For
+the same reason a package's signature is over the field list above rather than
+over its `metadata.json`.
+
+**Ed25519, through `ring`.** Chosen for what it did not cost: `ring` was already
+in the tree — `ureq`'s `rustls` pulls it in, and the cross-build already compiled
+its C and assembly for `aarch64-musl` — so this arrived with no new dependency,
+no new build requirement, and nothing new that might fail to cross-compile. Keys
+are 32 bytes and signatures 64, which matters when both travel inside an index a
+device downloads.
+
+**A private key is the one secret this program writes.** `keygen` writes it with
+mode 0600, set on the temporary file before the rename so it is never briefly
+world-readable under its final name. `PrivateKey` has a hand-written `Debug` that
+prints nothing, because the one thing that must never reach a log is its
+contents.
 
 ## Versions
 

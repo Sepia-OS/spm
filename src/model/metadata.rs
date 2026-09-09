@@ -30,6 +30,7 @@ use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
 use crate::model::name::{PackageName, Target};
 use crate::model::version::Version;
+use crate::sign::{PublicKey, Signature};
 
 /// A SHA-256 digest, as 64 lower-case hexadecimal characters.
 ///
@@ -162,6 +163,80 @@ pub struct Metadata {
     /// and `create` fills it in on the copy it packs.
     #[serde(with = "unfilled_is_empty")]
     pub sha256: Option<Sha256>,
+    /// The key the package was signed with, or `None` while it is unsigned.
+    ///
+    /// Written by `create --sign`, like the digest above and for the same
+    /// reason: an author cannot know it, because it is a fact about the build
+    /// rather than about the software. A device checks it against the key the
+    /// index published for this package - a package that names a key of its own
+    /// choosing proves nothing.
+    #[serde(default, with = "unsigned_is_empty_key")]
+    pub public_key: Option<PublicKey>,
+    /// The signature over this package's identity and payload.
+    ///
+    /// Not over this file: `metadata.json` is JSON, and two serialisations of
+    /// one document differ in whitespace while meaning the same thing, so a
+    /// signature over it would break for reasons that have nothing to do with
+    /// the package. What is signed is name, version, target and the payload
+    /// digest, bound together - see [`crate::sign`].
+    #[serde(default, with = "unsigned_is_empty_signature")]
+    pub signature: Option<Signature>,
+}
+
+/// `""` in the file means "not signed yet", as `""` means "not hashed yet".
+mod unsigned_is_empty_key {
+    use super::PublicKey;
+    use serde::{Deserialize, Deserializer, Serializer};
+
+    pub(super) fn serialize<S: Serializer>(
+        key: &Option<PublicKey>,
+        serializer: S,
+    ) -> Result<S::Ok, S::Error> {
+        match key {
+            Some(key) => serializer.serialize_str(key.as_str()),
+            None => serializer.serialize_str(""),
+        }
+    }
+
+    pub(super) fn deserialize<'de, D: Deserializer<'de>>(
+        deserializer: D,
+    ) -> Result<Option<PublicKey>, D::Error> {
+        let text = String::deserialize(deserializer)?;
+        if text.is_empty() {
+            return Ok(None);
+        }
+        PublicKey::parse(&text).map(Some).ok_or_else(|| {
+            serde::de::Error::custom(format!("'{text}' is not an Ed25519 public key"))
+        })
+    }
+}
+
+/// The same, for the signature.
+mod unsigned_is_empty_signature {
+    use super::Signature;
+    use serde::{Deserialize, Deserializer, Serializer};
+
+    pub(super) fn serialize<S: Serializer>(
+        signature: &Option<Signature>,
+        serializer: S,
+    ) -> Result<S::Ok, S::Error> {
+        match signature {
+            Some(signature) => serializer.serialize_str(signature.as_str()),
+            None => serializer.serialize_str(""),
+        }
+    }
+
+    pub(super) fn deserialize<'de, D: Deserializer<'de>>(
+        deserializer: D,
+    ) -> Result<Option<Signature>, D::Error> {
+        let text = String::deserialize(deserializer)?;
+        if text.is_empty() {
+            return Ok(None);
+        }
+        Signature::parse(&text).map(Some).ok_or_else(|| {
+            serde::de::Error::custom(format!("'{text}' is not an Ed25519 signature"))
+        })
+    }
 }
 
 #[cfg(test)]

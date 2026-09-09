@@ -397,6 +397,8 @@ mod tests {
                 description: String::new(),
                 dependencies: Vec::new(),
                 sha256: None,
+                public_key: None,
+                signature: None,
             },
             source: crate::model::name::SourceName::parse("sepia").unwrap(),
             reason: Reason::Explicit,

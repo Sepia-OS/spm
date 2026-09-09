@@ -35,6 +35,7 @@ use serde::{Deserialize, Serialize};
 use crate::model::metadata::{Dependency, Sha256};
 use crate::model::name::{PackageName, SourceName, Target};
 use crate::model::version::Version;
+use crate::sign::PublicKey;
 
 /// What a source publishes.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -90,6 +91,16 @@ pub struct IndexVersion {
     pub payload_sha256: Sha256,
     /// What has to be installed alongside it.
     pub dependencies: Vec<Dependency>,
+    /// The key this package must be signed with.
+    ///
+    /// The publisher's, not the source's: a package is built and signed in its
+    /// own repository, with a key that lives in that repository's secrets, and
+    /// the source only reports which key that was. The device learns it from
+    /// here - an index it has already checked against the key pinned for the
+    /// source - and then refuses any package that does not carry a signature
+    /// from exactly this key. A package naming a key of its own would be
+    /// vouching for itself.
+    pub public_key: PublicKey,
 }
 
 impl Index {
@@ -181,14 +192,16 @@ mod tests {
           "bytes": 16148070,
           "sha256": "{package}",
           "payload_sha256": "{payload}",
-          "dependencies": [ {{ "name": "llvm-runtime", "version": "23.1.0" }} ]
+          "dependencies": [ {{ "name": "llvm-runtime", "version": "23.1.0" }} ],
+          "public_key": "{key}"
         }}
       ]
     }}
   ]
 }}"#,
             package = digest(0xaa),
-            payload = digest(0xbb)
+            payload = digest(0xbb),
+            key = digest(0xcc)
         )
     }
 
@@ -250,9 +263,11 @@ mod tests {
                     "bytes": 1024,
                     "sha256": "{d}",
                     "payload_sha256": "{d}",
-                    "dependencies": []
+                    "dependencies": [],
+                    "public_key": "{k}"
                 }}"#,
-                d = digest(0x11)
+                d = digest(0x11),
+                k = digest(0x22)
             )
         };
         let text = format!(

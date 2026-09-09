@@ -30,6 +30,7 @@ use clap::Parser;
 use spm::cli::{Cli, Command};
 use spm::error::{Error, Result};
 use spm::model::name::{PackageRef, SourceRef};
+use spm::sign::{PrivateKey, PublicKey};
 use spm::{ops, ui};
 
 fn main() -> ExitCode {
@@ -218,10 +219,18 @@ fn run() -> Result<()> {
             let _lock = locked(&store)?;
             recover(&store)?;
             let transport = spm::net::https::Https::new();
+            let key = PublicKey::parse(args.key.trim()).ok_or_else(|| {
+                Error::Usage(format!(
+                    "'{}' is not an Ed25519 public key: {} lower-case hexadecimal characters, as 'spm keygen' printed",
+                    args.key,
+                    PublicKey::BYTES * 2
+                ))
+            })?;
             let added = ops::source::add_source(
                 &store,
                 &transport,
                 &args.url,
+                &key,
                 args.name.as_deref(),
                 args.default,
             )?;
@@ -260,8 +269,26 @@ fn run() -> Result<()> {
         }
 
         Command::Create(args) => {
-            let created = ops::create::create(&args.root, &args.metadata, &args.output)?;
+            let signer = args
+                .sign
+                .as_deref()
+                .map(ops::create::read_key)
+                .transpose()?;
+            let created =
+                ops::create::create(&args.root, &args.metadata, &args.output, signer.as_ref())?;
             ui::created(&created);
+            Ok(())
+        }
+
+        Command::Keygen(args) => {
+            let (private, public) = PrivateKey::generate()?;
+            ui::keygen(args.out.as_deref(), &private, &public)?;
+            Ok(())
+        }
+
+        Command::SignIndex(args) => {
+            let signed = ops::create::sign_index(&args.index, &args.key)?;
+            ui::signed_index(&signed);
             Ok(())
         }
     }

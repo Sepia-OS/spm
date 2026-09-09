@@ -42,10 +42,12 @@ pub mod net;
 use std::fs;
 use std::io::Read;
 use std::path::{Path, PathBuf};
+use std::sync::OnceLock;
 
 use sha2::{Digest, Sha256};
 use spm::model::metadata::Metadata;
 use spm::ops::create::{METADATA, PAYLOAD, create};
+use spm::sign::{PrivateKey, PublicKey};
 
 /// A package to build.
 pub struct Package {
@@ -57,6 +59,7 @@ pub struct Package {
     /// Path under the staged root, contents, and whether it is executable.
     files: Vec<(String, Vec<u8>, bool)>,
     licence: bool,
+    signed: bool,
 }
 
 /// A package that has been built, and where its three files are.
@@ -76,6 +79,80 @@ pub struct Built {
     pub bytes: u64,
 }
 
+/// The key every fixture signs with.
+///
+/// One key for the whole suite, made once: generating an Ed25519 keypair per
+/// package would be a few hundred keypairs across the suite for no gain, and
+/// the tests that care about a *wrong* key make their own with
+/// [`another_key`].
+///
+/// # Panics
+///
+/// If the system's random source will not produce a key.
+pub fn test_key() -> &'static PrivateKey {
+    static KEY: OnceLock<PrivateKey> = OnceLock::new();
+    KEY.get_or_init(|| {
+        let (text, _) = PrivateKey::generate().expect("a keypair");
+        PrivateKey::parse(&text).expect("the key it just made")
+    })
+}
+
+/// The public half of [`test_key`], which is what a source is added with.
+pub fn test_public_key() -> PublicKey {
+    test_key().public()
+}
+
+/// A different key, for tests about signatures that should not verify.
+///
+/// # Panics
+///
+/// If the system's random source will not produce a key.
+pub fn another_key() -> PrivateKey {
+    let (text, _) = PrivateKey::generate().expect("a keypair");
+    PrivateKey::parse(&text).expect("the key it just made")
+}
+
+/// A package built without a signature, for the tests that refuse one.
+///
+/// # Panics
+///
+/// If it cannot be built.
+pub fn unsigned_package(into: &Path, name: &str) -> Built {
+    Package::named(name).unsigned().build(into)
+}
+
+/// Serve an index and its signature together, and give back the index's URL.
+///
+/// The two always travel together - a device fetches `<url>` and `<url>.sig` -
+/// so a helper that produced one without the other would only ever be used
+/// wrongly. A test that wants a bad signature serves the `.sig` itself,
+/// afterwards.
+///
+/// # Panics
+///
+/// If the fixture cannot be served.
+pub fn serve_index(fake: &net::Fake, at: &str, index: &str, key: &PrivateKey) -> String {
+    let url = fake.serve(at, index.as_bytes());
+    fake.serve(
+        &format!("{at}.sig"),
+        format!("{}\n", key.sign_index(index.as_bytes())).as_bytes(),
+    );
+    url
+}
+
+/// Write an index and its signature where a source will fetch them.
+///
+/// The two always travel together, so making one without the other is a shape
+/// this helper does not offer: a test that wants an index with a bad signature
+/// writes the `.sig` itself.
+///
+/// # Panics
+///
+/// If the files cannot be written.
+pub fn sign_index_bytes(index: &str, key: &PrivateKey) -> String {
+    key.sign_index(index.as_bytes()).as_str().to_owned()
+}
+
 impl Package {
     /// A package with a licence and one executable of its own name, which is
     /// the smallest thing `create` will agree to build.
@@ -92,6 +169,7 @@ impl Package {
                 true,
             )],
             licence: true,
+            signed: true,
         }
     }
 
@@ -126,6 +204,13 @@ impl Package {
     #[must_use]
     pub fn executable(mut self, path: &str, contents: &[u8]) -> Self {
         self.files.push((path.to_owned(), contents.to_vec(), true));
+        self
+    }
+
+    /// Build it without a signature, for the tests about refusing one.
+    #[must_use]
+    pub fn unsigned(mut self) -> Self {
+        self.signed = false;
         self
     }
 
@@ -191,7 +276,8 @@ impl Package {
         )
         .unwrap();
 
-        let created = create(&stage, &metadata_file, &output)
+        let signer = if self.signed { Some(test_key()) } else { None };
+        let created = create(&stage, &metadata_file, &output, signer)
             .unwrap_or_else(|error| panic!("create refused the {} fixture: {error}", self.name));
 
         Built {
@@ -363,6 +449,12 @@ pub fn index_of(source: &str, entries: &[(&Built, String)]) -> String {
                 .clone()
                 .expect("a packed metadata carries its payload digest"),
             dependencies: metadata.dependencies.clone(),
+            // The key the fixture signed with, which is what `install` checks
+            // the package's own claim against.
+            // An unsigned fixture has no key of its own; the index still has to
+            // name one, and naming the suite's key is what makes the *package*
+            // the thing that fails rather than the index.
+            public_key: metadata.public_key.clone().unwrap_or_else(test_public_key),
         };
 
         // A package accumulates versions rather than replacing them, which is

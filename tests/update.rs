@@ -52,7 +52,7 @@ fn publish(fake: &Fake, source: &str, at: &str, packages: &[&Built]) -> String {
         .iter()
         .map(|built| (*built, fake.url_for("p.tar.gz")))
         .collect();
-    fake.serve(at, index_of(source, &entries).as_bytes())
+    support::serve_index(fake, at, &index_of(source, &entries), support::test_key())
 }
 
 #[test]
@@ -67,11 +67,24 @@ fn an_index_that_cannot_be_understood_leaves_the_previous_one_alone() {
 
     let one = plain(work.path());
     let url = publish(&fake, "sepia", "index.json", &[&one]);
-    add_source(&store, &fake, &url, None, false).unwrap();
+    add_source(
+        &store,
+        &fake,
+        &url,
+        &support::test_public_key(),
+        None,
+        false,
+    )
+    .unwrap();
     let before = std::fs::read(store.index_file(&name("sepia"))).unwrap();
 
     // The same URL now serves nonsense.
-    fake.serve("index.json", b"<html>the server is having a day</html>");
+    let body = "<html>the server is having a day</html>";
+    fake.serve("index.json", body.as_bytes());
+    fake.serve(
+        "index.json.sig",
+        format!("{}\n", support::test_key().sign_index(body.as_bytes())).as_bytes(),
+    );
     let report = update(&store, &fake, &Which::All).unwrap();
 
     assert_eq!(report.failed.len(), 1);
@@ -97,7 +110,7 @@ fn one_source_that_cannot_be_reached_does_not_stop_the_others() {
     let second = publish(&fake, "two", "two.json", &[&built]);
     let third = publish(&fake, "three", "three.json", &[&built]);
     for url in [&first, &second, &third] {
-        add_source(&store, &fake, url, None, false).unwrap();
+        add_source(&store, &fake, url, &support::test_public_key(), None, false).unwrap();
     }
 
     fake.break_url(&second);
@@ -159,16 +172,40 @@ fn a_named_source_is_the_only_one_fetched() {
     let built = plain(work.path());
     let first = publish(&fake, "one", "one.json", &[&built]);
     let second = publish(&fake, "two", "two.json", &[&built]);
-    add_source(&store, &fake, &first, None, false).unwrap();
-    add_source(&store, &fake, &second, None, false).unwrap();
+    add_source(
+        &store,
+        &fake,
+        &first,
+        &support::test_public_key(),
+        None,
+        false,
+    )
+    .unwrap();
+    add_source(
+        &store,
+        &fake,
+        &second,
+        &support::test_public_key(),
+        None,
+        false,
+    )
+    .unwrap();
 
     let before = fake.asked().len();
     let report = update(&store, &fake, &Which::One(name("two"))).unwrap();
 
     assert_eq!(report.updated.len(), 1);
     assert_eq!(report.updated[0].name.as_str(), "two");
+    // The index and its signature, and nothing belonging to the other source.
+    // The signature is fetched every time an index is: an index is not read
+    // until it has been checked, so the two are one request as far as this is
+    // concerned.
     let asked: Vec<String> = fake.asked().into_iter().skip(before).collect();
-    assert_eq!(asked, vec![second], "it fetched something else as well");
+    assert_eq!(
+        asked,
+        vec![second.clone(), format!("{second}.sig")],
+        "it fetched something else as well"
+    );
 }
 
 #[test]
@@ -194,7 +231,15 @@ fn what_is_new_since_the_last_time_is_counted() {
 
     let one = plain(work.path());
     let url = publish(&fake, "sepia", "index.json", &[&one]);
-    add_source(&store, &fake, &url, None, false).unwrap();
+    add_source(
+        &store,
+        &fake,
+        &url,
+        &support::test_public_key(),
+        None,
+        false,
+    )
+    .unwrap();
 
     // The source publishes a second package.
     let two = dependent(work.path());
@@ -214,7 +259,15 @@ fn a_source_with_nothing_to_update_is_not_a_failure() {
     let fake = Fake::serving(served.path());
     let one = plain(work.path());
     let url = publish(&fake, "sepia", "index.json", &[&one]);
-    add_source(&store, &fake, &url, None, false).unwrap();
+    add_source(
+        &store,
+        &fake,
+        &url,
+        &support::test_public_key(),
+        None,
+        false,
+    )
+    .unwrap();
 
     let report = update(&store, &fake, &Which::All).unwrap();
 
@@ -247,7 +300,15 @@ fn the_index_is_stored_as_it_arrived() {
     let fake = Fake::serving(served.path());
     let one = plain(work.path());
     let url = publish(&fake, "sepia", "index.json", &[&one]);
-    add_source(&store, &fake, &url, None, false).unwrap();
+    add_source(
+        &store,
+        &fake,
+        &url,
+        &support::test_public_key(),
+        None,
+        false,
+    )
+    .unwrap();
 
     update(&store, &fake, &Which::All).unwrap();
 

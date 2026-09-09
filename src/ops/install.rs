@@ -60,6 +60,7 @@ use crate::net::download;
 use crate::net::transport::Transport;
 use crate::ops::create::{METADATA, PAYLOAD};
 use crate::ops::resolve::{self, Needed, Selected};
+use crate::sign;
 use crate::store::db::Database;
 use crate::store::{Store, cache, space};
 use crate::{ui, unpack};
@@ -391,6 +392,48 @@ fn one(store: &Store, transport: &dyn Transport, step: &Step) -> Result<Vec<Path
             found: inside.payload_sha256.to_string(),
         });
     }
+
+    // And the signature, after both digests and before anything is unpacked.
+    //
+    // The digests prove the bytes are the ones the index described; this proves
+    // the index was describing something the publisher actually made. The key
+    // comes from the index rather than from the package - a package naming its
+    // own key would be vouching for itself - and the index is believed because
+    // it verified against the key pinned for this source when it was added.
+    let carried = inside
+        .metadata
+        .public_key
+        .as_ref()
+        .ok_or_else(|| Error::BadSignature {
+            what: format!("the package {}", name_of(&archive)),
+        })?;
+    if carried != &selected.version.public_key {
+        return Err(Error::BadSignature {
+            what: format!(
+                "the package {} - it is signed by {carried}, and the index says this package is signed by {}",
+                name_of(&archive),
+                selected.version.public_key
+            ),
+        });
+    }
+    let signature = inside
+        .metadata
+        .signature
+        .as_ref()
+        .ok_or_else(|| Error::BadSignature {
+            what: format!(
+                "the package {} - it carries no signature",
+                name_of(&archive)
+            ),
+        })?;
+    sign::verify_package(
+        carried,
+        signature,
+        &inside.metadata.name,
+        &inside.metadata.version,
+        &inside.metadata.target,
+        promised,
+    )?;
 
     // Everything it would write, worked out without writing any of it, so that
     // a package breaking one of the extraction rules is refused before a file

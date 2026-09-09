@@ -1454,40 +1454,47 @@ have been cut before either means anything.
 
 ---
 
-## Deferred
+## Once Deferred
 
-Named here so that leaving them out stays a decision rather than an oversight.
-None of them blocks a first release.
+**This list is empty, and that is what it now records.** Every item on it was
+named here so that leaving it out stayed a decision rather than an oversight,
+and each has since been built. They are kept rather than deleted because what a
+project decided *not* to do at the time, and why, is the part that is otherwise
+lost — a list that only ever held pending work would have quietly become an
+empty heading.
 
-**Configuration in packages has been done** and is no longer on this list. A
-package may ship a top-level `etc/`; `spm` records the digest of what it wrote
-there and treats an edited file as the administrator's - never overwriting it,
-never deleting it, and writing a new default beside it as `<name>.spmnew`
-instead. The behaviour is in [ARCHITECTURE.md](ARCHITECTURE.md) under
-*Configuration* and the mechanism in [DESIGN.md](DESIGN.md) under *Configuration
-files*.
+In the order they were built:
 
-**A digest for every installed file has been done** and is no longer on this
-list. A record carries the digest of every regular file as it was written -
-taken during the extraction rather than by a second pass over the card - so
-`verify` checks contents and not only presence. The cost was measured before it
-was accepted: 176 bytes of record per file, about 1.9 MB for a package the size
-of Helix.
+**Configuration in packages.** `create` refused anything outside `usr/`, so a
+package could not ship defaults in `/etc`. A package may now ship a top-level
+`etc/`; `spm` records the digest of what it wrote there and treats an edited
+file as the administrator's — never overwriting it, never deleting it, and
+writing a new default beside it as `<name>.spmnew` instead. The behaviour is in
+[ARCHITECTURE.md](ARCHITECTURE.md) under *Configuration* and the mechanism in
+[DESIGN.md](DESIGN.md) under *Configuration files*.
 
-**The `verify` command has been done** and is no longer on this list. It
-re-checks one package or the whole device against the records - present, still a
-file, and for configuration still what was written - reporting an edit as the
-non-fault it is and exiting 6 when something is actually wrong. What it cannot
-check is contents, which is now its own entry below.
+**Addressing a source by name.** `add-source`, `remove-source` and
+`source-info` took a URL while every other command took a name.
+`remove-source` and `source-info` now take either, told apart without a flag
+because a name cannot hold the `:` and `/` a URL's scheme needs. `add-source`
+still takes a URL, and that is not the same inconsistency: a source that has not
+been added yet has no name to be addressed by.
 
-**Addressing a source by name has been done** and is no longer on this list.
-`remove-source` and `source-info` take the name a source is configured under as
-well as its URL, told apart without a flag because a name cannot hold the `:`
-and `/` a URL's scheme needs. `add-source` still takes a URL, and that is not
-the same inconsistency: a source that has not been added yet has no name to be
-addressed by.
+**A `verify` command** to re-check installed files against their records. It
+checks one package or the whole device — present, still a file, and still the
+bytes that were installed — reporting an edited configuration file as the
+non-fault it is, and exiting 6 when something is actually wrong.
 
-- **Signing an index.** The digest chain protects a download from the network,
-  not a device from a source that has been taken over. Signing, with a key
-  pinned per source in `sources.json`, is the next layer and wants designing
-  before it is built.
+**A digest for every installed file**, which is what let `verify` check contents
+rather than only presence. A record carries the digest of every regular file as
+it was written, taken during the extraction rather than by a second pass over
+the card. The cost was measured before it was accepted: 176 bytes of record per
+file, about 1.9 MB for a package the size of Helix.
+
+**Signing an index** — and, as it turned out, packages too. The digest chain
+protected a download from the network, not a device from a source that had been
+taken over. Indexes are now signed by their source against a key pinned in
+`sources.json`, packages by their publisher against a key the verified index
+names, and a key is required rather than optional. The behaviour is in
+[ARCHITECTURE.md](ARCHITECTURE.md) under *Signing* and the trust chain in
+[DESIGN.md](DESIGN.md) under the same name.

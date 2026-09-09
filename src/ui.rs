@@ -24,6 +24,7 @@
 //! standard error, everything else to standard output.
 
 use crate::error::Error;
+use std::io::Write;
 
 /// Print an error the way every command prints one.
 ///
@@ -396,6 +397,109 @@ fn note(step: &crate::ops::install::Step) -> String {
     }
 }
 
+/// Write a new private key, and print the public half.
+///
+/// The private key goes to a file with permissions nobody else can read, or to
+/// stdout if no file was asked for - and the difference matters: a key printed
+/// to a terminal is in a scrollback buffer, so the file is the ordinary way and
+/// the other is for piping straight into something that stores secrets.
+///
+/// The public key is always printed. It is not a secret, and it is the thing
+/// somebody has to carry to every device that will trust this source.
+///
+/// # Errors
+///
+/// [`crate::error::Error::Io`] if the file cannot be written.
+pub fn keygen(
+    out: Option<&std::path::Path>,
+    private: &str,
+    public: &crate::sign::PublicKey,
+) -> crate::error::Result<()> {
+    let mut stdout = std::io::stdout();
+    let mut stderr = std::io::stderr();
+    write_keygen(out, private, public, &mut stdout, &mut stderr)
+}
+
+/// The part of `keygen` that decides what goes where.
+///
+/// Split out from the printing so the split itself can be tested, because it is
+/// the whole point: `spm keygen | gh secret set …` has to put the private key in
+/// the secret and *nothing else*. A stray blank line or a helpful sentence in
+/// there is a secret that does not work, discovered later and somewhere else.
+fn write_keygen(
+    out: Option<&std::path::Path>,
+    private: &str,
+    public: &crate::sign::PublicKey,
+    stdout: &mut dyn Write,
+    stderr: &mut dyn Write,
+) -> crate::error::Result<()> {
+    let io = |source: std::io::Error| crate::error::Error::Io {
+        path: std::path::PathBuf::from("<stdout>"),
+        source,
+    };
+
+    match out {
+        // Writing to a file: this is somebody at a terminal, so everything else
+        // is for them to read and stdout is where a person looks.
+        Some(path) => {
+            crate::store::atomic::write_private(path, format!("{private}\n").as_bytes())?;
+            writeln!(stdout, "Private key written to {}", path.display()).map_err(io)?;
+            writeln!(
+                stdout,
+                "Keep it where only the build that signs can reach it - a repository's"
+            )
+            .map_err(io)?;
+            writeln!(
+                stdout,
+                "secrets, not the repository. Anybody holding it can sign as you."
+            )
+            .map_err(io)?;
+            writeln!(stdout).map_err(io)?;
+            writeln!(
+                stdout,
+                "Public key (this is what goes on a device, and is not a secret):"
+            )
+            .map_err(io)?;
+            writeln!(stdout, "  {public}").map_err(io)?;
+        }
+        // No file: stdout is a pipe into something that stores secrets, so the
+        // private key is the only thing that may go there. Everything else -
+        // the guidance and the public key both - goes to stderr, where a person
+        // still sees it and a pipe does not.
+        None => {
+            writeln!(stdout, "{private}").map_err(io)?;
+            writeln!(
+                stderr,
+                "That is the private key, and the only thing on stdout. Store it where"
+            )
+            .map_err(io)?;
+            writeln!(
+                stderr,
+                "only the build that signs can reach it; anybody holding it can sign as you."
+            )
+            .map_err(io)?;
+            writeln!(stderr).map_err(io)?;
+            writeln!(
+                stderr,
+                "Public key (this is what goes on a device, and is not a secret):"
+            )
+            .map_err(io)?;
+            writeln!(stderr, "  {public}").map_err(io)?;
+        }
+    }
+    Ok(())
+}
+
+/// Say what an index was signed with.
+pub fn signed_index(signed: &crate::ops::create::SignedIndex) {
+    println!("Signed {}", signed.index.display());
+    println!("  signature  {}", signed.signature.display());
+    println!("  public key {}", signed.public_key);
+    println!();
+    println!("Publish the signature beside the index. A device adds this source with:");
+    println!("  spm add-source <url> --key {}", signed.public_key);
+}
+
 /// Say what `verify` found, package by package.
 ///
 /// A sound package gets one line. A package with something wrong gets its files
@@ -647,6 +751,80 @@ pub fn package_detail(details: &[crate::ops::query::Detail]) {
 )]
 mod tests {
     use super::*;
+
+    use crate::sign::PrivateKey;
+
+    fn keypair() -> (String, crate::sign::PublicKey) {
+        PrivateKey::generate().unwrap()
+    }
+
+    #[test]
+    fn piping_keygen_puts_the_private_key_on_stdout_and_nothing_else() {
+        // `spm keygen | gh secret set …` stores exactly what is on stdout. One
+        // stray line and the secret is a key with rubbish appended, which fails
+        // later and somewhere else.
+        let (private, public) = keypair();
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        write_keygen(None, &private, &public, &mut stdout, &mut stderr).unwrap();
+
+        assert_eq!(String::from_utf8(stdout).unwrap(), format!("{private}\n"));
+
+        // The public key is still shown - just where a pipe will not take it.
+        let said = String::from_utf8(stderr).unwrap();
+        assert!(said.contains(public.as_str()), "{said}");
+        assert!(!said.contains(&private), "the private key must not repeat");
+    }
+
+    #[test]
+    fn writing_a_key_to_a_file_talks_to_the_person_instead() {
+        let (private, public) = keypair();
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("source.key");
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        write_keygen(Some(&path), &private, &public, &mut stdout, &mut stderr).unwrap();
+
+        // Nothing is piped in this form, so it all goes to stdout.
+        let said = String::from_utf8(stdout).unwrap();
+        assert!(said.contains(public.as_str()), "{said}");
+        assert!(said.contains("source.key"), "{said}");
+        assert!(String::from_utf8(stderr).unwrap().is_empty());
+
+        // And the key itself went to the file, never to a stream.
+        assert_eq!(
+            std::fs::read_to_string(&path).unwrap(),
+            format!("{private}\n")
+        );
+        assert!(
+            !said.contains(&private),
+            "the key must not reach a terminal"
+        );
+    }
+
+    #[test]
+    fn a_written_private_key_is_readable_by_nobody_else() {
+        let (private, public) = keypair();
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("source.key");
+        write_keygen(
+            Some(&path),
+            &private,
+            &public,
+            &mut Vec::new(),
+            &mut Vec::new(),
+        )
+        .unwrap();
+
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mode = std::fs::metadata(&path).unwrap().permissions().mode();
+            assert_eq!(mode & 0o777, 0o600, "a private key is not for other people");
+        }
+    }
 
     #[test]
     fn a_size_is_written_the_way_a_person_reads_one() {

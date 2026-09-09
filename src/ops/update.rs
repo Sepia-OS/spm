@@ -151,7 +151,7 @@ pub fn update(store: &Store, transport: &dyn Transport, which: &Which) -> Result
             })
             .unwrap_or_default();
 
-        match fetch_index(transport, &source.url) {
+        match fetch_index(transport, &source.url, &source.key) {
             Ok(index) => {
                 let packages = index.packages.len();
                 let new_packages = if before.is_empty() {

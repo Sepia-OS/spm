@@ -28,6 +28,7 @@ use crate::model::index::Index;
 use crate::model::name::{SourceName, SourceRef};
 use crate::net::download;
 use crate::net::transport::Transport;
+use crate::sign::{self, PublicKey, Signature};
 use crate::store::config::{Source, Sources};
 use crate::store::db::Database;
 use crate::store::{Store, index};
@@ -63,13 +64,36 @@ pub struct Added {
 ///
 /// [`Error::Network`] or [`Error::ClockBehind`] if it cannot be fetched,
 /// [`Error::Parse`] if it cannot be understood.
-pub fn fetch_index(transport: &dyn Transport, url: &str) -> Result<Index> {
+pub fn fetch_index(transport: &dyn Transport, url: &str, key: &PublicKey) -> Result<Index> {
     let text = download::to_string(transport, url, INDEX_LIMIT)?;
+
+    // The signature is fetched from beside the index and checked **before the
+    // index is parsed**. Parsing first would mean deciding what the document
+    // says before knowing whether to believe any of it, and every field in it -
+    // which packages exist, where they are downloaded from, which keys signed
+    // them - is a thing an unsigned index could lie about.
+    let signature_url = format!("{url}{SIGNATURE_SUFFIX}");
+    let signature_text = download::to_string(transport, &signature_url, SIGNATURE_LIMIT)?;
+    let signature = Signature::parse(signature_text.trim()).ok_or_else(|| Error::Parse {
+        path: std::path::PathBuf::from(&signature_url),
+        message: format!(
+            "it is not an Ed25519 signature: {} lower-case hexadecimal characters",
+            Signature::BYTES * 2
+        ),
+    })?;
+    sign::verify_index(key, &signature, text.as_bytes(), url)?;
+
     serde_json::from_str(&text).map_err(|error| Error::Parse {
         path: std::path::PathBuf::from(url),
         message: error.to_string(),
     })
 }
+
+/// What is appended to an index's URL to reach its signature.
+const SIGNATURE_SUFFIX: &str = ".sig";
+
+/// The largest a signature file may be: 128 characters and some whitespace.
+const SIGNATURE_LIMIT: u64 = 1024;
 
 /// Add a source, or update the one already at this URL.
 ///
@@ -88,6 +112,7 @@ pub fn add_source(
     store: &Store,
     transport: &dyn Transport,
     url: &str,
+    key: &PublicKey,
     name: Option<&str>,
     make_default: bool,
 ) -> Result<Added> {
@@ -99,7 +124,11 @@ pub fn add_source(
         )));
     }
 
-    let index = fetch_index(transport, url)?;
+    // Fetched *and verified* against the key being pinned, before anything is
+    // written. So adding a source is also the first proof that the key is the
+    // right one: a mistyped key fails here, where nothing has been kept, rather
+    // than at the next `update` on a device that already trusts it.
+    let index = fetch_index(transport, url, key)?;
 
     // The name the index declares, unless the user gave one. Two sources are
     // free to call themselves the same thing, which is what `--name` is for.
@@ -139,6 +168,7 @@ pub fn add_source(
         name: name.clone(),
         url: url.to_owned(),
         is_default,
+        key: key.clone(),
     });
     sources.save(store)?;
 
