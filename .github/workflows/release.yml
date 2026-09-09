@@ -232,6 +232,23 @@ jobs:
       # with them, from the one placeholder.
       - name: Stamp the version
         run: |
+          # git will not touch the workspace without this, and the failure does
+          # not say so. actions/checkout adds the directory to safe.directory in
+          # a HOME it overrides *for its own run only*, and restores HOME when it
+          # finishes - so by the time this step runs the entry is gone. The
+          # workspace is owned by the host runner's uid and this container is
+          # root, which git treats as dubious ownership and refuses.
+          #
+          # What it actually printed was `fatal: not in a git directory`, from
+          # `git config user.name` - which writes to the repository's own config
+          # and so needs a repository git is willing to look at. The repository
+          # was there all along; that is why the message is worth writing down.
+          #
+          # Only this job needs it: it is the one place in the family where a
+          # release commits, because Cargo.toml carries a placeholder version in
+          # main and the release is where a real number is written.
+          git config --global --add safe.directory "$PWD"
+
           current="$(sed -n '0,/^version = /s/^version = "\(.*\)"/\1/p' Cargo.toml)"
           echo "Cargo.toml says ${current}; releasing ${VERSION}"
           if [ "$current" = "$VERSION" ]; then

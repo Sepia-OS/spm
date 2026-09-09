@@ -8,6 +8,25 @@ once it has something to version.
 
 ## [Unreleased]
 
+### Fixed
+
+- **The release workflow could not commit the version stamp**, which is where
+  the first attempt at a release stopped. `actions/checkout` adds the workspace
+  to git's `safe.directory`, but in a `HOME` it overrides *for its own run
+  only* - so by the time a later step calls git the entry is gone, and the
+  workspace is owned by the host runner's uid while the container runs as root.
+  git calls that dubious ownership and refuses.
+  What it printed was `fatal: not in a git directory`, from `git config
+  user.name`, which writes to the repository's own config and so needs a
+  repository git is willing to look at. The repository was there the whole time,
+  which is why that message sends you looking in the wrong place. The step now
+  adds `safe.directory` itself before touching git. Reproduced in
+  `rust:1.98-trixie` and fixed there before being committed: exit 128 without
+  it, 0 with it.
+  Only this repository is affected. It is the one place in the family where a
+  release commits, because `Cargo.toml` carries a placeholder version in `main`
+  and the release is where a real number is written.
+
 ### Changed
 
 - **A symlink may point at an absolute path, and `create` now checks where one
