@@ -1,6 +1,6 @@
 [package]
 name = "spm"
-version = "0.1.0-replace-me"
+version = "2026.9.0"
 edition = "2024"
 description = "A package manager for the SepiaOS operating system."
 

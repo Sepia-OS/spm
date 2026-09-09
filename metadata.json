@@ -1,6 +1,6 @@
 {
   "name": "spm",
-  "version": "0.1.0-replace-me",
+  "version": "2026.9.0",
   "target": "aarch64-musl",
   "description": "The SepiaOS package manager: installs, upgrades and removes packages on a device.",
   "dependencies": [],
