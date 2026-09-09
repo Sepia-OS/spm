@@ -396,6 +396,32 @@ re-serialisation of what they parse to. The index is parsed first all the same,
 so that signing something that is not an index fails once, here, rather than on
 every device that fetches it.
 
+### `sign <file> --key <file>`
+
+Signs anything, writing `<file>.sig` beside it. `sign-index` parses its input
+and refuses what is not an index, which is right for an index and left a source
+with nothing to sign the rest of what it publishes —
+`Sepia-OS/sepiaos-package-index` publishes a `source.json` saying what the
+source is called and which key to pin, and that is the case this exists for.
+
+Nothing is parsed, because nothing is assumed about the file. The bytes on disk
+are signed exactly as they are, for the same reason an index's are.
+
+**It signs under its own context**, `spm-file-v1`, and that is not a formality.
+Sharing a context with the index would let a source be made to publish an index
+it never signed: sign any bytes as a file, hand them over as an index, and the
+same signature checks out. The contexts are what make each signature mean one
+thing.
+
+### `verify-signature <file> --key <key>`
+
+Checks a file against the `<file>.sig` beside it, with the public key given.
+Exits zero if it verifies and with the bad-signature code if it does not, so a
+pipeline can gate on it.
+
+Named apart from `verify`, which asks a different question entirely — whether
+what is *installed* still matches its records.
+
 ### `verify [<package name>]`
 
 Re-checks what is installed against the records, for one package or for every

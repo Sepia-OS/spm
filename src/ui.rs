@@ -500,6 +500,32 @@ pub fn signed_index(signed: &crate::ops::create::SignedIndex) {
     println!("  spm add-source <url> --key {}", signed.public_key);
 }
 
+/// Say what `sign` wrote.
+///
+/// Says where the signature went and which key made it, because the second is
+/// what whoever checks it has to be given - and the whole point of a detached
+/// signature is that the two travel together.
+pub fn signed_file(signed: &crate::ops::create::SignedFile) {
+    println!("Signed {}", signed.file.display());
+    println!("  signature  {}", signed.signature.display());
+    println!("  public key {}", signed.public_key);
+    println!();
+    println!("Publish the signature beside the file. Whoever reads it checks with:");
+    println!(
+        "  spm verify-signature {} --key {}",
+        signed.file.display(),
+        signed.public_key
+    );
+}
+
+/// Say that a file checked out.
+///
+/// Names the key as well as the file: "it verified" is only half an answer when
+/// the question is whether it verified against the key you meant.
+pub fn verified_file(file: &std::path::Path, key: &crate::sign::PublicKey) {
+    println!("{} is signed by {key}", file.display());
+}
+
 /// Say what `verify` found, package by package.
 ///
 /// A sound package gets one line. A package with something wrong gets its files

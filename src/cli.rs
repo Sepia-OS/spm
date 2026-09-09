@@ -84,6 +84,12 @@ pub enum Command {
     /// Sign an index with a source's key
     SignIndex(SignIndexArgs),
 
+    /// Sign any file, writing the signature beside it
+    Sign(SignArgs),
+
+    /// Check a file against the signature beside it
+    VerifySignature(VerifySignatureArgs),
+
     /// Turn a staged tree into an installable package
     Create(CreateArgs),
 }
@@ -229,6 +235,33 @@ pub struct SignIndexArgs {
     /// The private key to sign it with, as `spm keygen` wrote it
     #[arg(long, value_name = "FILE")]
     pub key: PathBuf,
+}
+
+/// The arguments `sign` takes.
+#[derive(Debug, Args)]
+pub struct SignArgs {
+    /// The file to sign; the signature is written beside it as `<file>.sig`
+    #[arg(value_name = "FILE")]
+    pub file: PathBuf,
+
+    /// The private key to sign it with, as `spm keygen` wrote it
+    #[arg(long, value_name = "FILE")]
+    pub key: PathBuf,
+}
+
+/// The arguments `verify-signature` takes.
+///
+/// Named apart from `verify`, which re-checks *installed files* against their
+/// records and is a different question entirely.
+#[derive(Debug, Args)]
+pub struct VerifySignatureArgs {
+    /// The file to check; its signature is read from `<file>.sig`
+    #[arg(value_name = "FILE")]
+    pub file: PathBuf,
+
+    /// The public key it must be signed with
+    #[arg(long, value_name = "KEY")]
+    pub key: String,
 }
 
 /// The arguments `verify` takes.
