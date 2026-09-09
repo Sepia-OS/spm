@@ -40,6 +40,7 @@ use flate2::Compression;
 use flate2::write::GzEncoder;
 use sha2::{Digest, Sha256 as Hasher};
 
+use crate::conffile;
 use crate::error::{Error, Result};
 use crate::model::metadata::{Metadata, Sha256};
 use crate::store::atomic;
@@ -89,14 +90,20 @@ pub fn check_tree(root: &Path, metadata: &Metadata) -> Result<()> {
     let entries = collect(root)?;
 
     for entry in &entries {
-        // Everything under usr/. A package that writes outside it is altering
-        // the system rather than adding to it.
+        // Everything under usr/ or etc/. A package that writes outside them is
+        // altering the system rather than adding to it. `etc/` is the narrow
+        // exception, and it is narrow on purpose: it is where a package ships a
+        // default somebody may then edit, which is the one kind of file this
+        // program does not own outright - see `crate::conffile`.
         let top = entry.relative.components().next();
-        let under_usr = matches!(top, Some(Component::Normal(name)) if name == "usr");
-        if !under_usr {
+        let allowed = matches!(
+            top,
+            Some(Component::Normal(name)) if name == "usr" || name == conffile::ETC
+        );
+        if !allowed {
             return Err(Error::NotPackageable {
                 path: entry.relative.clone(),
-                reason: "everything in a package has to be under usr/ - a package that writes outside it is altering the system rather than adding to it".to_owned(),
+                reason: "everything in a package has to be under usr/ or etc/ - a package that writes outside them is altering the system rather than adding to it".to_owned(),
             });
         }
 
@@ -686,16 +693,31 @@ mod tests {
     }
 
     #[test]
-    fn a_file_outside_usr_is_refused() {
+    fn a_file_outside_usr_and_etc_is_refused() {
+        let directory = tempfile::tempdir().unwrap();
+        let tree = directory.path().join("stage");
+        staged(&tree);
+        fs::create_dir_all(tree.join("var/lib/helix")).unwrap();
+        fs::write(tree.join("var/lib/helix/state"), b"state").unwrap();
+
+        let (path, reason) = refusal(&tree, "helix");
+        assert_eq!(path, PathBuf::from("var"));
+        assert!(reason.contains("under usr/ or etc/"), "{reason}");
+    }
+
+    #[test]
+    fn configuration_under_etc_is_allowed() {
+        // The one place outside usr/ a package may write, because it is where a
+        // default somebody may then edit belongs.
         let directory = tempfile::tempdir().unwrap();
         let tree = directory.path().join("stage");
         staged(&tree);
         fs::create_dir_all(tree.join("etc")).unwrap();
-        fs::write(tree.join("etc/motd"), b"hello").unwrap();
+        fs::write(tree.join("etc/helix.conf"), b"theme = default\n").unwrap();
 
-        let (path, reason) = refusal(&tree, "helix");
-        assert_eq!(path, PathBuf::from("etc"));
-        assert!(reason.contains("under usr/"), "{reason}");
+        let metadata = author_metadata(directory.path(), "25.07.1");
+        let output = directory.path().join("dist");
+        create(&tree, &metadata, &output).expect("a package may ship configuration under etc/");
     }
 
     #[test]

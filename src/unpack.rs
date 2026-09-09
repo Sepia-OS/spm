@@ -26,9 +26,12 @@
 //! - **Relative, and inside the root.** No leading `/`, no `..`. An entry that
 //!   escapes is refused rather than clamped: a package that meant to write
 //!   outside the tree has not asked for something this can helpfully correct.
-//! - **Under `usr/`.** `ops::create` enforces this when packing, and this
-//!   enforces it again, because a package can reach a device without having
-//!   passed through this `create`.
+//! - **Under `usr/` or `etc/`.** `ops::create` enforces this when packing, and
+//!   this enforces it again, because a package can reach a device without
+//!   having passed through this `create`. `etc/` is where a package ships
+//!   configuration; what happens to such a file once somebody edits it is
+//!   `crate::conffile`'s business rather than this module's, which writes what
+//!   it is told to write.
 //! - **Regular files, directories and symlinks, and nothing else.** No devices,
 //!   no FIFOs, no sockets, and in particular no hard links - a hard link to
 //!   `/etc/shadow` is a way to hand out its contents.
@@ -53,6 +56,9 @@ use std::fs::{self, File};
 use std::io::{self, BufWriter, Read};
 use std::path::{Component, Path, PathBuf};
 
+use std::collections::BTreeSet;
+
+use crate::conffile;
 use crate::error::{Error, Result};
 
 /// What one entry in a payload is.
@@ -91,6 +97,16 @@ impl Entry {
     /// Everything but a directory: a record's `files` is what `remove` walks
     /// backwards, and directories are removed when they empty rather than by
     /// being claimed.
+    /// Whether this entry is a configuration file rather than the package's own.
+    ///
+    /// A regular file under `etc/`. A symlink there is not one: there is no
+    /// content of its own to compare, and following it to decide would be
+    /// asking about whatever it points at instead.
+    #[must_use]
+    pub fn is_config_file(&self) -> bool {
+        matches!(self.kind, Kind::File { .. }) && conffile::is_config(&self.path)
+    }
+
     #[must_use]
     pub fn is_recorded(&self) -> bool {
         !matches!(self.kind, Kind::Directory { .. })
@@ -129,7 +145,12 @@ pub fn inspect(payload: impl Read, from: &Path) -> Result<Vec<Entry>> {
 /// As [`inspect`], plus [`Error::FileUnowned`] if something that is not a
 /// directory is sitting where a directory has to go, and [`Error::Io`] if a
 /// file cannot be written.
-pub fn extract(payload: impl Read, from: &Path, root: &Path) -> Result<Vec<PathBuf>> {
+pub fn extract(
+    payload: impl Read,
+    from: &Path,
+    root: &Path,
+    keep: &BTreeSet<PathBuf>,
+) -> Result<Vec<PathBuf>> {
     // On a device this is `/` and has been there since the card was written.
     // Making it is for the tests, which unpack into a directory that does not
     // exist yet, and costs nothing when it already does.
@@ -140,6 +161,14 @@ pub fn extract(payload: impl Read, from: &Path, root: &Path) -> Result<Vec<PathB
 
     let mut written = Vec::new();
     for_each(payload, from, |entry, contents| {
+        // A configuration file the caller asked to keep is not written over;
+        // the new default lands beside it instead, so the change is on the card
+        // to be looked at rather than lost. Everything else is written as it
+        // comes.
+        let mut entry = entry;
+        if keep.contains(&entry.path) {
+            entry.path = conffile::diverted(&entry.path);
+        }
         write_entry(root, &entry, contents)?;
         if entry.is_recorded() {
             written.push(entry.path);
@@ -271,28 +300,34 @@ fn safe_path(path: &Path) -> Result<PathBuf> {
         }
     }
 
-    if !starts_at_usr(path) {
+    if !starts_at_a_writable_top(path) {
         return Err(Error::UnsafeEntry {
             path: path.to_path_buf(),
-            reason: "a package writes under usr/ and nowhere else - anything outside it belongs to the system image, and a package that writes there is altering the system rather than adding to it".to_owned(),
+            reason: "a package writes under usr/ or etc/ and nowhere else - anything outside them belongs to the system image, and a package that writes there is altering the system rather than adding to it".to_owned(),
         });
     }
 
     Ok(path.to_path_buf())
 }
 
-/// Whether a checked path begins with the one directory a package may write in.
-fn starts_at_usr(path: &Path) -> bool {
-    matches!(path.components().next(), Some(Component::Normal(first)) if first == "usr")
+/// Whether a checked path begins with a directory a package may write in.
+///
+/// Two of them: `usr/`, which the package owns outright, and `etc/`, where it
+/// ships defaults an administrator may then edit. Nothing else.
+fn starts_at_a_writable_top(path: &Path) -> bool {
+    matches!(
+        path.components().next(),
+        Some(Component::Normal(first)) if first == "usr" || first == conffile::ETC
+    )
 }
 
 /// Check where a symlink points.
 ///
 /// A link is a path the package writes, so its target is checked the same way
 /// one is: it has to be relative, and once resolved against the directory the
-/// link sits in it has to land under `usr/` like everything else. That is what
-/// stops a package shipping `usr/lib/x -> /etc` and then writing `usr/lib/x/passwd`
-/// in the next entry.
+/// link sits in it has to land under `usr/` or `etc/` like everything else.
+/// That is what stops a package shipping `usr/lib/x -> /var` and then writing
+/// `usr/lib/x/spool` in the next entry.
 fn safe_target(link: &Path, target: &Path) -> Result<()> {
     let refuse = |reason: &str| Error::UnsafeEntry {
         path: link.to_path_buf(),
@@ -326,9 +361,9 @@ fn safe_target(link: &Path, target: &Path) -> Result<()> {
     }
 
     let landed: PathBuf = resolved.iter().collect();
-    if !starts_at_usr(&landed) {
+    if !starts_at_a_writable_top(&landed) {
         return Err(refuse(&format!(
-            "that is {}, which is outside usr/",
+            "that is {}, which is outside usr/ and etc/",
             if landed.as_os_str().is_empty() {
                 PathBuf::from("the root of the device")
             } else {
@@ -666,7 +701,12 @@ mod tests {
     }
 
     fn extracting_into(archive: &Path, root: &Path) -> Result<Vec<PathBuf>> {
-        extract(File::open(archive).unwrap(), archive, root)
+        extract(
+            File::open(archive).unwrap(),
+            archive,
+            root,
+            &BTreeSet::new(),
+        )
     }
 
     /// What refusing an entry said, or a failure naming what happened instead.
@@ -826,13 +866,59 @@ mod tests {
     }
 
     #[test]
-    fn an_entry_outside_usr_is_refused() {
+    fn an_entry_outside_usr_and_etc_is_refused() {
         // `ops::create` refuses this when packing; a package can reach a device
         // without having passed through that `create`.
-        let (_directory, outcome) = extracting(vec![file("etc/motd", b"hello")]);
+        let (_directory, outcome) = extracting(vec![file("var/lib/x/state", b"s")]);
         let (path, reason) = refusal(outcome);
-        assert_eq!(path, PathBuf::from("etc/motd"));
-        assert!(reason.contains("usr/"), "{reason}");
+        assert_eq!(path, PathBuf::from("var/lib/x/state"));
+        assert!(reason.contains("usr/ or etc/"), "{reason}");
+    }
+
+    #[test]
+    fn an_entry_under_etc_is_written() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path().join("root");
+        let archive = payload(
+            temp.path(),
+            vec![directory("etc"), file("etc/helix.conf", b"theme\n")],
+        );
+
+        let written = extract(
+            File::open(&archive).unwrap(),
+            &archive,
+            &root,
+            &BTreeSet::new(),
+        )
+        .expect("a package may ship configuration under etc/");
+        assert_eq!(written, vec![PathBuf::from("etc/helix.conf")]);
+        assert_eq!(fs::read(root.join("etc/helix.conf")).unwrap(), b"theme\n");
+    }
+
+    #[test]
+    fn a_kept_configuration_file_is_diverted_beside_the_one_on_the_card() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path().join("root");
+        fs::create_dir_all(root.join("etc")).unwrap();
+        fs::write(root.join("etc/helix.conf"), b"mine\n").unwrap();
+
+        let archive = payload(
+            temp.path(),
+            vec![directory("etc"), file("etc/helix.conf", b"theirs\n")],
+        );
+
+        let mut keep = BTreeSet::new();
+        keep.insert(PathBuf::from("etc/helix.conf"));
+        let written = extract(File::open(&archive).unwrap(), &archive, &root, &keep).unwrap();
+
+        // The edit is untouched and the new default is beside it, under the
+        // whole name plus the suffix.
+        assert_eq!(fs::read(root.join("etc/helix.conf")).unwrap(), b"mine\n");
+        assert_eq!(
+            fs::read(root.join("etc/helix.conf.spmnew")).unwrap(),
+            b"theirs\n"
+        );
+        assert_eq!(written, vec![PathBuf::from("etc/helix.conf.spmnew")]);
     }
 
     #[test]
@@ -871,7 +957,8 @@ mod tests {
         // A link is a path the package writes, so where it points is checked
         // the same way. `usr/lib/x` sits in `usr/lib`, so it takes two steps up
         // to leave `usr/` and three to leave the device's root altogether.
-        for target in ["/etc", "../../etc", "../../../../etc/passwd"] {
+        // `var/` rather than `etc/`, which a package may now write.
+        for target in ["/var", "../../var", "../../../../var/lib/passwd"] {
             let (_directory, outcome) = extracting(vec![link("usr/lib/x", target)]);
             let (path, reason) = refusal(outcome);
             assert_eq!(path, PathBuf::from("usr/lib/x"), "{target}");

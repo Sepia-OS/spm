@@ -10,6 +10,28 @@ once it has something to version.
 
 ### Added
 
+- **A package can ship configuration.** `create` and the extraction rules now
+  accept a top-level `etc/` beside `usr/`, so a package can carry the defaults
+  it needs rather than expecting somebody to write them by hand. The rule was
+  widened by exactly one directory: anything else is still refused, by both the
+  packing and the unpacking, because a package that writes elsewhere is altering
+  the system rather than adding to it.
+- **An edit to a configuration file is never lost.** `spm` records the digest of
+  each `etc/` file as it wrote it, and every later decision about that file asks
+  whether what is on the card still matches. A file nobody touched is a stale
+  default and is replaced on upgrade and removed with the package; a file
+  somebody edited is theirs, and is never overwritten and never deleted - not by
+  an upgrade, not by a removal, and not by the rollback of an install that
+  stopped halfway.
+- On upgrade the new default is written beside an edited file rather than over
+  it, as `<name>.spmnew` - `helix.conf` gains `helix.conf.spmnew`, keeping the
+  whole original name so two files differing only by extension cannot collide.
+  Both `upgrade` and `remove` name the files they left rather than counting
+  them, because a file nobody is told about is a decision nobody will make.
+- The digest kept is always of what was shipped, never of the edit, so a file
+  stays edited for every upgrade after the first. Recording the administrator's
+  own bytes would make the next upgrade believe nobody had touched it.
+
 - The suite runs on the architecture it ships for. A cross-build only proves
   the compiler was willing; CI now executes all 305 tests on `aarch64` as well
   as on the host - under `qemu-user` on the x86_64 runners, which costs little

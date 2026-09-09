@@ -176,6 +176,55 @@ To upgrade just one package, or to look before doing anything:
 # spm upgrade --dry-run
 ```
 
+## Configuration you have edited
+
+Some packages ship a default configuration file under `/etc`. `spm` remembers
+exactly what it wrote there, which is how it can tell a default nobody wanted
+from a decision you made.
+
+**If you never touched the file**, an upgrade quietly replaces it with the new
+default and a removal takes it away with the package. There is nothing to think
+about.
+
+**If you edited it**, `spm` will not overwrite it and will not delete it. On an
+upgrade it writes the new default beside yours instead:
+
+```
+$ spm upgrade
+Upgraded:
+  helix     25.07.1 -> 25.09.0
+1 configuration file you had edited was left as it is; the new default is beside it:
+  /etc/helix.conf.spmnew
+```
+
+Your `/etc/helix.conf` is untouched. `/etc/helix.conf.spmnew` is what the new
+version would have installed. Compare them, take whatever you want from the new
+one, and delete the `.spmnew` when you are done:
+
+```sh
+diff /etc/helix.conf /etc/helix.conf.spmnew
+rm /etc/helix.conf.spmnew
+```
+
+Nothing goes wrong if you leave it there — it is an ordinary file and nothing
+reads it — but the next upgrade will write over it with a newer default, so it
+is worth dealing with while you remember what it was about.
+
+Removing a package tells you the same thing:
+
+```
+$ spm remove helix
+Removed:
+  helix     25.09.0
+41 files removed.
+1 configuration file was edited since it was installed, and is left in place:
+  /etc/helix.conf
+```
+
+That file is yours now. If you reinstall the package later, `spm` will refuse
+rather than write over it, because it belongs to nobody — delete it first if you
+want the package's default back.
+
 ## Removing
 
 ```console

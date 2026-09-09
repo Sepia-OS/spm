@@ -32,6 +32,7 @@
 
 mod support;
 
+use std::collections::BTreeMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -297,6 +298,7 @@ fn a_file_two_records_claim_survives_the_first_of_them_going() {
             reason: Reason::Explicit,
             installed_at: 1,
             files,
+            config: BTreeMap::new(),
         };
         database.begin(&record).unwrap();
         database.commit(&name(package)).unwrap();
@@ -506,6 +508,7 @@ fn an_install_that_did_not_finish_is_taken_back_before_a_removal_runs() {
         reason: Reason::Explicit,
         installed_at: 1,
         files: vec![PathBuf::from("usr/bin/half-installed")],
+        config: BTreeMap::new(),
     };
     database.begin(&record).unwrap();
 

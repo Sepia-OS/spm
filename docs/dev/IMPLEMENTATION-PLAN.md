@@ -1459,6 +1459,14 @@ have been cut before either means anything.
 Named here so that leaving them out stays a decision rather than an oversight.
 None of them blocks a first release.
 
+**Configuration in packages has been done** and is no longer on this list. A
+package may ship a top-level `etc/`; `spm` records the digest of what it wrote
+there and treats an edited file as the administrator's - never overwriting it,
+never deleting it, and writing a new default beside it as `<name>.spmnew`
+instead. The behaviour is in [ARCHITECTURE.md](ARCHITECTURE.md) under
+*Configuration* and the mechanism in [DESIGN.md](DESIGN.md) under *Configuration
+files*.
+
 - **Signing an index.** The digest chain protects a download from the network,
   not a device from a source that has been taken over. Signing, with a key
   pinned per source in `sources.json`, is the next layer and wants designing
@@ -1467,5 +1475,3 @@ None of them blocks a first release.
   data is already there; the command is not specified.
 - **Addressing a source by name** in `add-source`, `remove-source` and
   `source-info`, which take a URL while every other command takes a name.
-- **Configuration in packages.** `create` refuses anything outside `usr/`, so a
-  package cannot ship defaults in `/etc`.

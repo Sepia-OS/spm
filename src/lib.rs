@@ -26,6 +26,7 @@
 //! result into an exit code.
 
 pub mod cli;
+pub mod conffile;
 pub mod error;
 pub mod model;
 pub mod net;

@@ -40,6 +40,7 @@ use spm::store::Store;
 use spm::store::config::{Source, Sources};
 use spm::store::db::Database;
 use spm::store::index;
+use std::collections::BTreeMap;
 use support::{Built, Package, index_of};
 
 fn target() -> Target {
@@ -74,6 +75,7 @@ fn mark_installed(store: &Store, built: &Built, source: &str) {
         reason: Reason::Explicit,
         installed_at: 1,
         files: Vec::new(),
+        config: BTreeMap::new(),
     };
     let db = Database::new(store);
     db.begin(&record).unwrap();

@@ -210,6 +210,10 @@ it is opened at all**; `data.tar.gz` is then checked against the `sha256` in
 the `metadata.json` inside it. Only then is it unpacked into `/`, and the files
 it wrote are recorded.
 
+Configuration files — anything the package ships under `etc/` — are recorded
+with the digest of what was written, which is what later tells an untouched
+default from one somebody has edited. See **Configuration** below.
+
 `install` refuses rather than overwrites:
 
 - **A file that another package owns** stops the installation, and both
@@ -234,7 +238,10 @@ that pattern to remove it.
 
 Exactly the files recorded for that package are removed, and nothing else — a
 file that another installed package also owns stays, and so does anything `spm`
-did not install. Directories are removed once they are empty.
+did not install. A configuration file somebody has edited stays too, and is
+named, because it is their work rather than the package's; an untouched one goes
+with the package, being only a default nobody wanted. Directories are removed
+once they are empty.
 
 Anything that was installed only as a dependency, and that nothing else still
 needs, is removed along with it. That is the other half of `install` recording
@@ -354,7 +361,8 @@ A package is a `.tar.gz` with exactly two members:
   package without unpacking `data.tar.gz` first.
 
 `create` packs a tree that is already laid out the way it is to appear on the
-device — `usr/bin`, `usr/lib`, `usr/share/licenses/<package name>/` and so on.
+device — `usr/bin`, `usr/lib`, `usr/share/licenses/<package name>/`, `etc/` and
+so on.
 It builds nothing itself; it packages what a build has already staged. The
 command supports the following options:
 
@@ -407,10 +415,35 @@ beside the sources it describes:
   describes does. The author leaves it empty, and `create` fills it in on the
   copy it packs.
 
+### Configuration
+
+Everything a package ships under `usr/` is the package's own: `spm` replaces it
+on upgrade and deletes it on remove without asking. `etc/` is the exception,
+because a default exists to be changed.
+
+At install time the digest of each `etc/` file is recorded. Every later decision
+about that file asks whether what is on the card still matches it:
+
+- **Nothing has touched it.** It is a stale default. An upgrade replaces it; a
+  removal takes it away.
+- **Somebody edited it.** It is theirs. Nothing overwrites it and nothing deletes
+  it — not an upgrade, not a removal, not the rollback of an install that failed
+  halfway. On upgrade the new default is written beside it with `.spmnew`
+  appended to the whole name, so `helix.conf` gains `helix.conf.spmnew`, and the
+  command says which files it left for somebody to look at.
+
+The digest recorded is always of what `spm` shipped, never of the edit, so a
+file stays "edited" for every upgrade after the first. There is no merging: `spm`
+puts the two versions side by side and the decision stays with the person who
+made the edit.
+
 `create` refuses to write a package that could not be installed safely:
 
-- **Everything in the tree has to be under `usr/`.** A package that writes
-  outside it is altering the system rather than adding to it.
+- **Everything in the tree has to be under `usr/` or `etc/`.** A package that
+  writes outside them is altering the system rather than adding to it. `etc/` is
+  the narrow exception, and narrow on purpose: it is where a package ships a
+  default an administrator may then edit, which is the one kind of file `spm`
+  does not own outright.
 - **A licence has to be present** under `usr/share/licenses/<name>/`. A package
   carries somebody else's work, and shipping it without its licence is not
   something this tool should make easy.

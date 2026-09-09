@@ -47,6 +47,7 @@
 use std::fs;
 use std::path::PathBuf;
 
+use crate::conffile;
 use crate::error::{Error, Result};
 use crate::model::installed::{Reason, Record};
 use crate::model::name::{PackageName, PackageRef, SourceName};
@@ -69,8 +70,13 @@ pub struct Going {
     /// The files that will actually be deleted.
     ///
     /// Not the record's whole list: a path some record that stays also claims
-    /// is not one of them.
+    /// is not one of them, and neither is a configuration file somebody has
+    /// edited - those are in `kept`.
     pub files: Vec<PathBuf>,
+    /// The configuration files that stay behind, and why they are not in
+    /// `files`: somebody edited them, so they are the administrator's work
+    /// rather than the package's, and removing the package does not remove it.
+    pub kept: Vec<PathBuf>,
 }
 
 /// What a removal would do, worked out before it does any of it.
@@ -86,6 +92,12 @@ impl Removal {
     #[must_use]
     pub fn files(&self) -> usize {
         self.packages.iter().map(|going| going.files.len()).sum()
+    }
+
+    /// How many configuration files it will leave behind.
+    #[must_use]
+    pub fn kept(&self) -> usize {
+        self.packages.iter().map(|going| going.kept.len()).sum()
     }
 }
 
@@ -140,12 +152,14 @@ pub fn plan(store: &Store, reference: &PackageRef) -> Result<Removal> {
         else {
             continue;
         };
+        let keeping = unshared(store, &installed, &going, record)?;
         packages.push(Going {
             name: record.metadata.name.clone(),
             version: record.metadata.version.clone(),
             source: record.source.clone(),
             unneeded: record.metadata.name != named.metadata.name,
-            files: unshared(&installed, &going, record),
+            files: keeping.0,
+            kept: keeping.1,
         });
     }
 
@@ -252,17 +266,33 @@ fn with_unneeded(installed: &[Record], named: &Record) -> Vec<PackageName> {
 /// record is a file somebody can edit, and deleting a file another package is
 /// using because two records disagreed is not a mistake worth being able to
 /// make.
-fn unshared(installed: &[Record], going: &[PackageName], record: &Record) -> Vec<PathBuf> {
-    record
-        .files
-        .iter()
-        .filter(|file| {
-            !installed
-                .iter()
-                .any(|other| !going.contains(&other.metadata.name) && other.files.contains(file))
-        })
-        .cloned()
-        .collect()
+fn unshared(
+    store: &Store,
+    installed: &[Record],
+    going: &[PackageName],
+    record: &Record,
+) -> Result<(Vec<PathBuf>, Vec<PathBuf>)> {
+    let mut files = Vec::new();
+    let mut kept = Vec::new();
+
+    for file in &record.files {
+        let claimed = installed
+            .iter()
+            .any(|other| !going.contains(&other.metadata.name) && other.files.contains(file));
+        if claimed {
+            continue;
+        }
+        // The third place the same question is asked. A configuration file
+        // nobody touched is a stale default and goes with the package; one
+        // somebody edited is theirs, and outlives the package that brought it.
+        if conffile::may_delete(store.root(), file, &record.config)? {
+            files.push(file.clone());
+        } else {
+            kept.push(file.clone());
+        }
+    }
+
+    Ok((files, kept))
 }
 
 /// Delete one package's files, and the directories they leave empty.

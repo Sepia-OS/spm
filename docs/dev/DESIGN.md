@@ -51,6 +51,7 @@ src/
   main.rs           argument parsing, dispatch, exit codes
   cli.rs            the clap definitions - one struct per command
   error.rs          Error, and the exit code each variant maps to
+  conffile.rs       etc/: which files are the administrator's, and when
   model/
     version.rs      Version and its ordering
     metadata.rs     Metadata: what is in a package's metadata.json
@@ -152,7 +153,8 @@ anything is fetched.
   "source": "sepia",
   "reason": "explicit",
   "installed_at": 1757260800,
-  "files": [ "usr/bin/hx", "usr/lib/helix/runtime/grammars/rust.so" ]
+  "files": [ "usr/bin/hx", "usr/lib/helix/runtime/grammars/rust.so", "etc/helix.conf" ],
+  "config": { "etc/helix.conf": "9f2c…" }
 }
 ```
 
@@ -160,6 +162,48 @@ anything is fetched.
 `remove`'s autoremove. `files` are relative to `/`, in the order they were
 written, so undoing an install is walking the list backwards. Directories are
 not listed: they are removed when they empty out.
+
+`config` holds the digest of each configuration file **as `spm` wrote it**, and
+only paths under `etc/` appear in it. It is absent from records written before
+configuration files existed, and reads as empty, so an older device can still be
+upgraded. What it is for is the next section.
+
+### Configuration files
+
+A file under `usr/` belongs to the package that put it there: `spm` replaces it
+on upgrade and deletes it on remove without asking anybody. `etc/` is the one
+place where that is wrong, because the whole point of a default is that somebody
+may change it.
+
+So every decision about an `etc/` file asks one question first — *is this still
+the bytes we wrote?* — by hashing what is on the card and comparing it against
+`config`. Two answers, and the whole policy follows from them:
+
+- **Untouched.** Nobody wanted it, so it is a stale default: replaced on
+  upgrade, deleted on remove, exactly like anything under `usr/`.
+- **Edited.** Somebody decided something, so it is theirs: never overwritten and
+  never deleted. On upgrade the new default is written beside it with `.spmnew`
+  appended to the whole name — `helix.conf` becomes `helix.conf.spmnew`, so the
+  original name stays legible and two files differing only by extension cannot
+  collide — and both the upgrade and the removal name the files they left, since
+  a file nobody is told about is a decision nobody will make.
+
+**The recorded digest is of what was shipped, never of the edit.** Once a file
+has been diverted the record keeps the digest it already had, so it stays edited
+for every upgrade after that. Recording the administrator's own bytes would make
+the next upgrade believe nobody had touched it and overwrite it, which is the
+single outcome this exists to prevent.
+
+**The same question is asked at all three places files are deleted** — `remove`
+taking a package back, `upgrade` dropping what the new version no longer ships,
+and the rollback of an install that did not finish — because an answer that
+differed between them would be a way to lose the file at whichever one forgot.
+It is one function, `conffile::may_delete`, and all three call it.
+
+A diverted file is recorded too, under its `.spmnew` name, together with the
+file it was diverted around. Leaving the latter out of the record would hand the
+administrator's file to nobody: `remove` would never reach it and a later install
+would refuse to overwrite it.
 
 ## Versions
 
@@ -279,9 +323,11 @@ checked before it is created:
 - **The path must be relative and must stay inside the root.** No leading `/`,
   no component equal to `..` — after normalisation, an entry that escapes is a
   refusal, not a clamp.
-- **The path must start with `usr/`.** `create` enforces this when packing;
-  `install` enforces it again when unpacking, because a package can reach a
-  device without having passed through this `create`.
+- **The path must start with `usr/` or `etc/`.** `create` enforces this when
+  packing; `install` enforces it again when unpacking, because a package can
+  reach a device without having passed through this `create`. `usr/` is the
+  package's own; `etc/` is where it ships defaults somebody may then edit, and
+  what happens to one of those afterwards is in *Configuration files* above.
 - **Only regular files, directories and symlinks.** No devices, no FIFOs, no
   sockets, no hard links — a hard link to `/etc/shadow` is a way to hand out
   its contents.
@@ -455,9 +501,6 @@ What `spm` trusts, and what it does not:
 - **A source is addressed by URL in `add-source`, `remove-source` and
   `source-info`, and by name everywhere else.** Accepting either where a source
   is named would cost little and remove the one inconsistency in the CLI.
-- **`create` refuses anything outside `usr/`, so a package cannot ship a
-  default configuration** in `/etc`. Whether that is a limitation to fix or a
-  rule to keep is not settled.
 - **Nothing signs an index.** The chain of digests protects a download from the
   network; it does not protect the device from a source that has been taken
   over. Signing the index, and pinning a key per source in `sources.json`, is

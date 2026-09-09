@@ -52,6 +52,7 @@ use crate::ops::install::{self, Plan};
 use crate::ops::resolve::{Needed, Selected};
 use crate::store::db::Database;
 use crate::store::{Store, index};
+use std::path::PathBuf;
 
 /// A package that could have moved and did not.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -75,6 +76,9 @@ pub struct Report {
     pub plan: Plan,
     /// The packages left where they were, and why.
     pub held: Vec<Held>,
+    /// The configuration files whose new default was written beside the one on
+    /// the card, because somebody had edited it.
+    pub diverted: Vec<PathBuf>,
     /// How many packages were considered.
     pub considered: usize,
     /// Whether it was done, as opposed to only described.
@@ -190,6 +194,7 @@ pub fn upgrade(
 
     if dry_run || plan.is_empty() {
         return Ok(Report {
+            diverted: Vec::new(),
             rolled_back,
             plan,
             held,
@@ -198,9 +203,10 @@ pub fn upgrade(
         });
     }
 
-    install::carry_out(store, transport, &plan)?;
+    let diverted = install::carry_out(store, transport, &plan)?;
 
     Ok(Report {
+        diverted,
         rolled_back,
         plan,
         held,

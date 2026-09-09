@@ -270,10 +270,36 @@ pub fn installed(outcome: &crate::ops::install::Outcome) {
     }
 
     println!("Download: {}.", size(plan.download));
+    diverted(&outcome.diverted);
     if !outcome.changed {
         // The point of --dry-run, said plainly rather than left to be inferred
         // from the absence of anything else.
         println!("Nothing was changed.");
+    }
+}
+
+/// Name the configuration files whose new default was written beside the one on
+/// the card.
+///
+/// Named rather than counted, and to stdout rather than stderr: a `.spmnew`
+/// nobody is told about is a correction nobody will ever look at, and the whole
+/// reason it was written instead of installed is that somebody has to decide.
+fn diverted(paths: &[std::path::PathBuf]) {
+    if paths.is_empty() {
+        return;
+    }
+    if paths.len() == 1 {
+        println!(
+            "1 configuration file you had edited was left as it is; the new default is beside it:"
+        );
+    } else {
+        println!(
+            "{} configuration files you had edited were left as they are; the new defaults are beside them:",
+            paths.len()
+        );
+    }
+    for path in paths {
+        println!("  /{}", path.display());
     }
 }
 
@@ -329,6 +355,7 @@ pub fn upgraded(report: &crate::ops::upgrade::Report) {
         );
         steps(&report.plan);
         println!("Download: {}.", size(report.plan.download));
+        diverted(&report.diverted);
         if !report.changed {
             println!("Nothing was changed.");
         }
@@ -409,6 +436,31 @@ pub fn removed(outcome: &crate::ops::remove::Outcome) {
 
     let files = removal.files();
     println!("{files} file{} removed.", if files == 1 { "" } else { "s" });
+
+    // Named rather than counted. A configuration file that outlives its package
+    // is something the administrator has to decide about later, and a number
+    // tells them nothing about which file or where.
+    let kept: Vec<&std::path::PathBuf> = removal
+        .packages
+        .iter()
+        .flat_map(|going| going.kept.iter())
+        .collect();
+    if !kept.is_empty() {
+        if kept.len() == 1 {
+            println!(
+                "1 configuration file was edited since it was installed, and is left in place:"
+            );
+        } else {
+            println!(
+                "{} configuration files were edited since they were installed, and are left in place:",
+                kept.len()
+            );
+        }
+        for path in kept {
+            println!("  /{}", path.display());
+        }
+    }
+
     if !outcome.changed {
         println!("Nothing was changed.");
     }

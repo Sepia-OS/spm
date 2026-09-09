@@ -42,6 +42,7 @@
 //! safe reading of one left behind is to take back what it claims. That
 //! asymmetry is what makes an interrupted install recoverable at all.
 
+use std::collections::{BTreeMap, BTreeSet};
 use std::fs::File;
 use std::io::{self, Read};
 use std::path::{Path, PathBuf};
@@ -49,6 +50,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use sha2::{Digest, Sha256 as Hasher};
 
+use crate::conffile;
 use crate::error::{Error, Result};
 use crate::model::installed::{Reason, Record};
 use crate::model::metadata::{Metadata, Sha256};
@@ -96,6 +98,13 @@ pub struct Replaced {
     /// The files it put on the device, so that the ones the new version does
     /// not ship can be taken away rather than left behind owned by nobody.
     pub files: Vec<PathBuf>,
+    /// The digests of its configuration files, as that version wrote them.
+    ///
+    /// What decides whether an upgrade may replace a configuration file: if
+    /// what is on the card still hashes to this, nobody has touched it and the
+    /// new default goes in; if it does not, the file is somebody's work and the
+    /// new default is written beside it instead.
+    pub config: BTreeMap<PathBuf, Sha256>,
 }
 
 /// One package an install would put on the device.
@@ -150,6 +159,12 @@ pub struct Outcome {
     pub rolled_back: Vec<PackageName>,
     /// What was to be done.
     pub plan: Plan,
+    /// The configuration files whose new default was written beside the one on
+    /// the card, because somebody had edited it.
+    ///
+    /// The `.spmnew` paths themselves, so the caller can name them. Empty on a
+    /// dry run, which writes nothing.
+    pub diverted: Vec<PathBuf>,
     /// Whether it was done, as opposed to only described.
     pub changed: bool,
 }
@@ -207,6 +222,7 @@ pub fn plan_for(store: &Store, needed: Vec<Needed>) -> Result<Plan> {
                 version: record.metadata.version.clone(),
                 source: record.source.clone(),
                 files: record.files.clone(),
+                config: record.config.clone(),
             }),
             None => Change::New,
         };
@@ -257,15 +273,17 @@ pub fn install(
         return Ok(Outcome {
             rolled_back,
             plan,
+            diverted: Vec::new(),
             changed: false,
         });
     }
 
-    carry_out(store, transport, &plan)?;
+    let diverted = carry_out(store, transport, &plan)?;
 
     Ok(Outcome {
         rolled_back,
         plan,
+        diverted,
         changed: true,
     })
 }
@@ -282,14 +300,15 @@ pub fn install(
 /// [`Error::UnsafeEntry`] if the package holds something extraction will not
 /// write, [`Error::FileConflict`] or [`Error::FileUnowned`] if a file is
 /// already spoken for, and [`Error::Io`] for the rest.
-pub fn carry_out(store: &Store, transport: &dyn Transport, plan: &Plan) -> Result<()> {
+pub fn carry_out(store: &Store, transport: &dyn Transport, plan: &Plan) -> Result<Vec<PathBuf>> {
     enough_room(store, plan.download)?;
 
+    let mut diverted = Vec::new();
     for step in &plan.steps {
-        one(store, transport, step)?;
+        diverted.extend(one(store, transport, step)?);
     }
 
-    Ok(())
+    Ok(diverted)
 }
 
 /// Refuse before filling the root filesystem, rather than after.
@@ -327,7 +346,11 @@ fn room_for(download: u64, free: u64, root: &Path) -> Result<()> {
 }
 
 /// Fetch, check, unpack and record one package.
-fn one(store: &Store, transport: &dyn Transport, step: &Step) -> Result<()> {
+///
+/// Returns the configuration files whose new default had to be written beside
+/// the one on the card, so that the caller can say so: a `.spmnew` nobody is
+/// told about is a change nobody will ever look at.
+fn one(store: &Store, transport: &dyn Transport, step: &Step) -> Result<Vec<PathBuf>> {
     let selected = &step.selected;
     let archive = cache::package_file(
         store,
@@ -372,22 +395,63 @@ fn one(store: &Store, transport: &dyn Transport, step: &Step) -> Result<()> {
     // a package breaking one of the extraction rules is refused before a file
     // has been created.
     let entries = with_payload(&archive, |payload| unpack::inspect(payload, &archive))?;
-    let files: Vec<PathBuf> = entries
+    let recorded: Vec<unpack::Entry> = entries
         .into_iter()
         .filter(unpack::Entry::is_recorded)
-        .map(|entry| entry.path)
         .collect();
+
+    // What the version being replaced, if any, recorded about its own
+    // configuration. An install onto a card that has none of this package leaves
+    // it empty, and then nothing below diverts anything.
+    let previously = match &step.change {
+        Change::Replaces(replaced) => replaced.config.clone(),
+        Change::New => BTreeMap::new(),
+    };
+
+    // The configuration files somebody has edited since they were installed.
+    // Those are not this program's to overwrite, so the new default is diverted
+    // beside them; everything else is written where it says.
+    let mut keep = BTreeSet::new();
+    for entry in &recorded {
+        if !entry.is_config_file() {
+            continue;
+        }
+        if let Some(installed) = previously.get(&entry.path)
+            && !conffile::is_untouched(&store.root().join(&entry.path), Some(installed))?
+        {
+            keep.insert(entry.path.clone());
+        }
+    }
+
+    // The record lists what extraction will actually write - so a diverted
+    // default is listed under its `.spmnew` name - **and** the file it was
+    // diverted around, which this package still owns. Leaving the latter out
+    // would hand the administrator's file to nobody: `remove` would never reach
+    // it and a later install would refuse to overwrite it.
+    let mut files: Vec<PathBuf> = Vec::with_capacity(recorded.len());
+    for entry in &recorded {
+        if keep.contains(&entry.path) {
+            files.push(conffile::diverted(&entry.path));
+            files.push(entry.path.clone());
+        } else {
+            files.push(entry.path.clone());
+        }
+    }
 
     unclaimed(store, step, &files)?;
 
     // The package's own metadata, as it arrived, which is what the record
     // format asks for.
-    let record = Record {
+    let mut record = Record {
         metadata: inside.metadata,
         source: selected.source.clone(),
         reason: step.reason,
         installed_at: now(),
         files,
+        // Filled in below, once the files exist: the digest of a configuration
+        // file is of what was written, and until the extraction has run there
+        // is nothing to hash.
+        config: BTreeMap::new(),
     };
 
     // The journal, then the files, then the record. In that order an install
@@ -397,8 +461,34 @@ fn one(store: &Store, transport: &dyn Transport, step: &Step) -> Result<()> {
     let database = Database::new(store);
     database.begin(&record)?;
     with_payload(&archive, |payload| {
-        unpack::extract(payload, &archive, store.root())
+        unpack::extract(payload, &archive, store.root(), &keep)
     })?;
+
+    // Now the configuration digests, because now there are files to take them
+    // of. A file that was written gets the digest of what was written; a file
+    // that was diverted around keeps the digest it already had, so that it
+    // stays "edited" for every upgrade after this one. Recording the
+    // administrator's own bytes instead would make the next upgrade believe
+    // nobody had touched it and overwrite it, which is the single outcome this
+    // whole mechanism exists to prevent.
+    for entry in &recorded {
+        if !entry.is_config_file() {
+            continue;
+        }
+        let digest = if keep.contains(&entry.path) {
+            previously.get(&entry.path).cloned()
+        } else {
+            conffile::digest_of(&store.root().join(&entry.path))?
+        };
+        if let Some(digest) = digest {
+            record.config.insert(entry.path.clone(), digest);
+        }
+    }
+    // The journal is rewritten with the digests in it before it is committed.
+    // Safe to do between the extraction and the commit because the amendment
+    // adds only `config`: the file list an undo walks is exactly what it was, so
+    // a crash on either side of this leaves the same recoverable state.
+    database.begin(&record)?;
     database.commit(&selected.name)?;
 
     // The old version's files that the new one does not ship. Only now that the
@@ -408,7 +498,7 @@ fn one(store: &Store, transport: &dyn Transport, step: &Step) -> Result<()> {
         superseded(store, &record, replaced)?;
     }
 
-    Ok(())
+    Ok(keep.iter().map(|path| conffile::diverted(path)).collect())
 }
 
 /// What was found inside a package.
@@ -606,6 +696,13 @@ fn superseded(store: &Store, record: &Record, replaced: &Replaced) -> Result<()>
             .iter()
             .any(|other| other.metadata.name != record.metadata.name && other.files.contains(file));
         if claimed {
+            continue;
+        }
+
+        // A configuration file the administrator has edited is not the old
+        // version's to take away, even though the new version stopped shipping
+        // it. The same question `remove` and the rollback ask.
+        if !conffile::may_delete(store.root(), file, &replaced.config)? {
             continue;
         }
 

@@ -33,6 +33,7 @@
 
 mod support;
 
+use std::collections::BTreeMap;
 use std::path::Path;
 
 use spm::error::Error;
@@ -77,6 +78,7 @@ fn installed_from(store: &Store, built: &Built, source: &str) {
         reason: Reason::Explicit,
         installed_at: 1,
         files: Vec::new(),
+        config: BTreeMap::new(),
     };
     let db = Database::new(store);
     db.begin(&record).unwrap();

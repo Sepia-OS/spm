@@ -35,6 +35,7 @@
 use std::fs;
 use std::path::{Component, Path, PathBuf};
 
+use crate::conffile;
 use crate::error::{Error, Result};
 use crate::model::installed::Record;
 use crate::model::name::PackageName;
@@ -253,6 +254,14 @@ impl<'store> Database<'store> {
                     ),
                 });
             };
+            // The same question `remove` and `upgrade` ask. An install that did
+            // not finish still must not take away a configuration file somebody
+            // had edited before it started - the journal names what the install
+            // *would* have written, and over an edited file it wrote nothing.
+            if !conffile::may_delete(self.store.root(), file, &record.config)? {
+                continue;
+            }
+
             match fs::remove_file(&path) {
                 // The ordinary case: the journal is written before the files.
                 Ok(()) => {}
@@ -368,10 +377,12 @@ fn under(root: &Path, file: &Path) -> Option<PathBuf> {
 )]
 mod tests {
     use super::*;
+
     use crate::model::installed::Reason;
     use crate::model::metadata::Metadata;
     use crate::model::name::Target;
     use crate::model::version::Version;
+    use std::collections::BTreeMap;
 
     fn package(name: &str) -> PackageName {
         PackageName::parse(name).unwrap()
@@ -391,6 +402,7 @@ mod tests {
             reason: Reason::Explicit,
             installed_at: 1,
             files: files.iter().map(PathBuf::from).collect(),
+            config: BTreeMap::new(),
         }
     }
 

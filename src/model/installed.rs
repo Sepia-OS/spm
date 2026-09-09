@@ -28,11 +28,12 @@
 //! an install is walking the list backwards. Directories are not listed: they
 //! go when they empty out.
 
+use std::collections::BTreeMap;
 use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
 
-use crate::model::metadata::Metadata;
+use crate::model::metadata::{Metadata, Sha256};
 use crate::model::name::{PackageName, SourceName};
 use crate::model::version::Version;
 
@@ -71,6 +72,22 @@ pub struct Record {
     /// written into it. A package carrying such a path therefore cannot be
     /// recorded, so `install` has to refuse one — see the extraction rules.
     pub files: Vec<PathBuf>,
+    /// The digest of each configuration file, as `spm` wrote it.
+    ///
+    /// Only paths under `etc/` appear here, and only regular files. Everything
+    /// under `usr/` belongs to the package outright, so there is nothing to
+    /// compare and nothing to decide.
+    ///
+    /// This is what tells an edited file from an untouched one later: `upgrade`
+    /// and `remove` hash what is on the card and compare it against the digest
+    /// recorded here. See [`crate::conffile`] for the policy that follows from
+    /// the answer.
+    ///
+    /// `#[serde(default)]` because a record written before configuration files
+    /// existed has no such key, and a device that cannot read its own older
+    /// records is a device that cannot be upgraded.
+    #[serde(default)]
+    pub config: BTreeMap<PathBuf, Sha256>,
 }
 
 impl Record {
