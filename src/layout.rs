@@ -77,7 +77,7 @@
 //! says which directories are addressable at all.
 
 use std::fmt::Write as _;
-use std::path::{Component, Path};
+use std::path::{Component, Path, PathBuf};
 
 use crate::conffile;
 
@@ -99,6 +99,55 @@ pub fn is_writable_root(path: &Path) -> bool {
         path.components().next(),
         Some(Component::Normal(first)) if ROOTS.iter().any(|root| first == *root)
     )
+}
+
+/// Where a symbolic link lands, relative to the root of the device.
+///
+/// A link is a path a package writes, so where it points is checked the same way
+/// the path itself is. This resolves the target against the directory the link
+/// sits in and hands back the landing place for [`is_writable_root`] to judge;
+/// it does not touch the filesystem, and says nothing about whether anything is
+/// there.
+///
+/// **An absolute target starts again from the root of the device**, which is
+/// what `/` means to the card that ends up with the link. musl's loader is
+/// exactly this and could not be packaged otherwise: `lib/ld-musl-aarch64.so.1`
+/// points at `/usr/lib/libc.so`, and the absolute spelling is upstream's, not a
+/// mistake — the file is both the shared libc and the program interpreter, and
+/// every binary on the card names that path in its `PT_INTERP`.
+///
+/// This grants nothing a relative target did not already have. `usr/bin/x`
+/// pointing at `../../etc/shadow` resolves to `etc/shadow` and always has; the
+/// absolute spelling of the same place now resolves to the same answer instead
+/// of being refused for its punctuation. What stops a package writing *through*
+/// a link is [`crate::unpack`] refusing to follow one, not this.
+///
+/// `None` if the target walks up past the root of the device, which is a link
+/// pointing at nothing this program can reason about.
+#[must_use]
+pub fn resolve_link(link: &Path, target: &Path) -> Option<PathBuf> {
+    let mut resolved: Vec<Component<'_>> = link
+        .parent()
+        .unwrap_or(Path::new(""))
+        .components()
+        .collect();
+
+    for part in target.components() {
+        match part {
+            // Absolute: whatever the link's own directory was, `/` restarts.
+            Component::RootDir => resolved.clear(),
+            Component::Normal(_) => resolved.push(part),
+            Component::CurDir => {}
+            Component::ParentDir => {
+                resolved.pop()?;
+            }
+            // A drive letter, which cannot occur on the device and is not
+            // something to guess the meaning of.
+            Component::Prefix(_) => return None,
+        }
+    }
+
+    Some(resolved.iter().collect())
 }
 
 /// The roots as a sentence: `bin/, etc/, lib/, sbin/ or usr/`.
@@ -217,6 +266,85 @@ mod tests {
         for root in ROOTS {
             assert!(listed.contains(&format!("{root}/")), "{root} is missing");
         }
+    }
+
+    #[test]
+    fn a_relative_target_resolves_against_the_links_own_directory() {
+        // busybox's applets, which is the common case: several hundred links in
+        // one directory pointing at one file in it.
+        assert_eq!(
+            resolve_link(Path::new("bin/sh"), Path::new("busybox")),
+            Some(PathBuf::from("bin/busybox"))
+        );
+        assert_eq!(
+            resolve_link(Path::new("sbin/init"), Path::new("../bin/busybox")),
+            Some(PathBuf::from("bin/busybox"))
+        );
+        assert_eq!(
+            resolve_link(Path::new("usr/bin/awk"), Path::new("../../bin/busybox")),
+            Some(PathBuf::from("bin/busybox"))
+        );
+    }
+
+    #[test]
+    fn an_absolute_target_starts_again_from_the_root_of_the_device() {
+        // musl's loader, and the reason this function exists. The absolute
+        // spelling is upstream's: every binary on the card names that path in
+        // its PT_INTERP.
+        assert_eq!(
+            resolve_link(
+                Path::new("lib/ld-musl-aarch64.so.1"),
+                Path::new("/usr/lib/libc.so")
+            ),
+            Some(PathBuf::from("usr/lib/libc.so"))
+        );
+        // The link's own directory is discarded rather than prepended - the
+        // answer must not depend on where the link happens to sit.
+        assert_eq!(
+            resolve_link(Path::new("usr/lib/x"), Path::new("/lib/y")),
+            resolve_link(Path::new("bin/x"), Path::new("/lib/y"))
+        );
+    }
+
+    #[test]
+    fn a_target_that_walks_above_the_root_has_nowhere_to_land() {
+        assert_eq!(
+            resolve_link(Path::new("bin/sh"), Path::new("../../..")),
+            None
+        );
+        assert_eq!(
+            resolve_link(Path::new("usr/bin/x"), Path::new("../../../../etc/passwd")),
+            None
+        );
+    }
+
+    #[test]
+    fn a_target_outside_the_roots_is_visible_as_such() {
+        // resolve_link only says where it lands; is_writable_root judges it.
+        // Splitting the two is what lets create and unpack phrase their own
+        // refusals while agreeing on the answer.
+        let landed = resolve_link(Path::new("usr/bin/x"), Path::new("/var/lib/spm"))
+            .expect("it lands somewhere");
+        assert_eq!(landed, PathBuf::from("var/lib/spm"));
+        assert!(!is_writable_root(&landed));
+    }
+
+    #[test]
+    fn an_absolute_target_grants_nothing_a_relative_one_did_not() {
+        // The two spellings of one place resolve alike, which is the argument
+        // for accepting the absolute one at all.
+        assert_eq!(
+            resolve_link(Path::new("usr/bin/x"), Path::new("/etc/helix.conf")),
+            resolve_link(Path::new("usr/bin/x"), Path::new("../../etc/helix.conf"))
+        );
+    }
+
+    #[test]
+    fn a_curdir_component_changes_nothing() {
+        assert_eq!(
+            resolve_link(Path::new("bin/sh"), Path::new("./busybox")),
+            Some(PathBuf::from("bin/busybox"))
+        );
     }
 
     #[test]

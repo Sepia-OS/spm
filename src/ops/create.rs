@@ -106,6 +106,30 @@ pub fn check_tree(root: &Path, metadata: &Metadata) -> Result<()> {
                 ),
             });
         }
+
+        // A link is a path the package writes, so where it lands is checked
+        // too. `unpack` asks this of every entry it extracts, and until it was
+        // asked here as well `create` would happily pack a link that no device
+        // would then install - a package built by this program that this
+        // program refuses. musl's loader is how that came to light.
+        if let Kind::Symlink(target) = &entry.kind {
+            let landed = layout::resolve_link(&entry.relative, target);
+            let allowed = landed.as_deref().is_some_and(layout::is_writable_root);
+            if !allowed {
+                return Err(Error::NotPackageable {
+                    path: entry.relative.clone(),
+                    reason: format!(
+                        "it is a symbolic link pointing at {}, which lands {} - a link has to land under {} like anything else a package writes",
+                        target.display(),
+                        landed.map_or_else(
+                            || "above the root of the device".to_owned(),
+                            |landed| format!("at {}", landed.display())
+                        ),
+                        layout::listed()
+                    ),
+                });
+            }
+        }
     }
 
     // A licence, under the package's own name.
@@ -748,17 +772,55 @@ mod tests {
         // wrong about where to stop it: it made the libc unpackageable rather
         // than a *second* libc unpackageable. `ops::install` is what refuses
         // the second one, by never writing over a file it does not own.
+        //
+        // The loader is staged exactly as musl's own `make install` leaves it -
+        // a symlink to the *absolute* /usr/lib/libc.so - because that is the
+        // path every binary on the card names in its PT_INTERP.
         let directory = tempfile::tempdir().unwrap();
         let tree = directory.path().join("stage");
         fs::create_dir_all(tree.join("lib")).unwrap();
         fs::create_dir_all(tree.join("usr/lib")).unwrap();
         fs::create_dir_all(tree.join("usr/share/licenses/musl")).unwrap();
-        fs::write(tree.join("lib/ld-musl-aarch64.so.1"), b"\x7fELF").unwrap();
         fs::write(tree.join("usr/lib/libc.so"), b"\x7fELF").unwrap();
         fs::write(tree.join("usr/share/licenses/musl/COPYRIGHT"), b"MIT").unwrap();
+        #[cfg(unix)]
+        std::os::unix::fs::symlink("/usr/lib/libc.so", tree.join("lib/ld-musl-aarch64.so.1"))
+            .unwrap();
 
         check_tree(&tree, &metadata_for("musl"))
             .expect("the loader's path is compiled into every binary on the card");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_link_landing_outside_the_roots_is_refused_when_packing_too() {
+        // The half that was missing: `unpack` asked this of every entry and
+        // `create` asked it of none, so `create` would build a package that no
+        // device would install - one this program made and this program then
+        // refused. Both spellings of the same escape, since accepting absolute
+        // targets is what made the second one reachable.
+        for target in ["/var/lib/spm", "../../var/lib/spm"] {
+            let directory = tempfile::tempdir().unwrap();
+            let tree = directory.path().join("stage");
+            staged(&tree);
+            std::os::unix::fs::symlink(target, tree.join("usr/bin/escape")).unwrap();
+
+            let (path, reason) = refusal(&tree, "helix");
+            assert_eq!(path, PathBuf::from("usr/bin/escape"), "{target}");
+            assert!(reason.contains("var/lib/spm"), "{reason}");
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_link_walking_above_the_root_is_refused_when_packing() {
+        let directory = tempfile::tempdir().unwrap();
+        let tree = directory.path().join("stage");
+        staged(&tree);
+        std::os::unix::fs::symlink("../../../../..", tree.join("usr/bin/up")).unwrap();
+
+        let (_path, reason) = refusal(&tree, "helix");
+        assert!(reason.contains("above the root of the device"), "{reason}");
     }
 
     #[test]

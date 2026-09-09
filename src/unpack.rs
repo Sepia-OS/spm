@@ -338,14 +338,16 @@ fn safe_path(path: &Path) -> Result<PathBuf> {
 /// Check where a symlink points.
 ///
 /// A link is a path the package writes, so its target is checked the same way
-/// one is: it has to be relative, and once resolved against the directory the
-/// link sits in it has to land under one of [`crate::layout`]'s roots like
-/// everything else. That is what stops a package shipping `usr/lib/x -> /var`
-/// and then writing `usr/lib/x/spool` in the next entry.
+/// one is: [`layout::resolve_link`] says where it lands, and that has to be
+/// under one of [`crate::layout`]'s roots like everything else. That is what
+/// stops a package shipping `usr/lib/x -> /var` and then writing
+/// `usr/lib/x/spool` in the next entry.
 ///
-/// Note that this resolves and checks the *link's own* landing place, not the
-/// file at the far end. `bin/sh -> busybox` lands in `bin/`, which is what
-/// makes busybox's several hundred applet symlinks expressible at all.
+/// Note that this checks the *link's own* landing place, not the file at the far
+/// end. `bin/sh -> busybox` lands in `bin/`, which is what makes busybox's
+/// several hundred applet symlinks expressible at all, and
+/// `lib/ld-musl-aarch64.so.1 -> /usr/lib/libc.so` lands in `usr/`, which is what
+/// makes musl's loader expressible.
 fn safe_target(link: &Path, target: &Path) -> Result<()> {
     let refuse = |reason: &str| Error::UnsafeEntry {
         path: link.to_path_buf(),
@@ -355,30 +357,10 @@ fn safe_target(link: &Path, target: &Path) -> Result<()> {
         ),
     };
 
-    let mut resolved: Vec<Component<'_>> = link
-        .parent()
-        .unwrap_or(Path::new(""))
-        .components()
-        .collect();
+    let Some(landed) = layout::resolve_link(link, target) else {
+        return Err(refuse("that walks up out of the root of the device"));
+    };
 
-    for part in target.components() {
-        match part {
-            Component::Normal(_) => resolved.push(part),
-            Component::CurDir => {}
-            Component::ParentDir => {
-                if resolved.pop().is_none() {
-                    return Err(refuse("that walks up out of the root of the device"));
-                }
-            }
-            Component::RootDir | Component::Prefix(_) => {
-                return Err(refuse(
-                    "a link in a package points somewhere inside the package rather than at an absolute path on the device it happens to land on",
-                ));
-            }
-        }
-    }
-
-    let landed: PathBuf = resolved.iter().collect();
     if !layout::is_writable_root(&landed) {
         return Err(refuse(&format!(
             "that is {}, which is outside {}",
@@ -1081,6 +1063,37 @@ mod tests {
             let (path, reason) = refusal(outcome);
             assert_eq!(path, PathBuf::from("usr/lib/x"), "{target}");
             assert!(reason.contains(target), "{reason}");
+        }
+    }
+
+    #[test]
+    fn an_absolute_symlink_landing_in_a_root_is_written() {
+        // musl's loader, which is spelled absolutely by upstream because every
+        // binary on the card names that path in its PT_INTERP. This was refused
+        // for its punctuation alone until `layout::resolve_link`: `/usr/lib`
+        // is `usr/lib`, and a relative spelling of the same place always passed.
+        let directory = tempfile::tempdir().unwrap();
+        let archive = payload(
+            directory.path(),
+            vec![
+                file("usr/lib/libc.so", b"\x7fELF"),
+                link("lib/ld-musl-aarch64.so.1", "/usr/lib/libc.so"),
+            ],
+        );
+        let root = directory.path().join("device");
+
+        extracting_into(&archive, &root).expect("the loader is how every binary starts");
+
+        #[cfg(unix)]
+        {
+            let loader = root.join("lib/ld-musl-aarch64.so.1");
+            assert!(fs::symlink_metadata(&loader).unwrap().is_symlink());
+            // Written as it was spelled: resolving it to a relative path would
+            // change what the card sees, and the card is where it has to work.
+            assert_eq!(
+                fs::read_link(&loader).unwrap(),
+                PathBuf::from("/usr/lib/libc.so")
+            );
         }
     }
 

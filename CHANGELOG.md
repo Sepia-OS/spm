@@ -10,6 +10,22 @@ once it has something to version.
 
 ### Changed
 
+- **A symlink may point at an absolute path, and `create` now checks where one
+  lands at all.** Two halves of one bug, found packaging musl. Its loader is
+  `lib/ld-musl-aarch64.so.1 -> /usr/lib/libc.so`, spelled absolutely by upstream
+  because that is the path every binary on the card names in its `PT_INTERP`.
+  `unpack` refused any absolute target outright, on the reasoning that a link
+  should point inside the package rather than at wherever it lands - but the
+  place it lands *is* the device, and `/usr/lib/libc.so` is `usr/lib/libc.so`
+  there. The relative spelling of the same place always passed, so the refusal
+  was about punctuation rather than about reach; both now resolve through
+  `layout::resolve_link` and are judged by where they end up.
+- The other half is worse and was invisible: **`create` checked no symlink
+  target at all**, while `unpack` checked every one. So `create` would happily
+  build a package that no device would install - one this program made and this
+  program then refused, with nothing between the two to say so. Both call the
+  same resolver now.
+
 - **A package may now write under `bin/`, `sbin/` and `lib/`, as well as `usr/`
   and `etc/`.** The old pair made two packages the operating system actually
   needs impossible to express: busybox, whose applets declare where they belong
