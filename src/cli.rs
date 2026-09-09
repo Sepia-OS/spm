@@ -166,9 +166,9 @@ pub struct ListArgs {
 /// `spm source-info`.
 #[derive(Debug, Args)]
 pub struct SourceInfoArgs {
-    /// The URL of the source, as `spm list-sources` shows it
-    #[arg(value_name = "URL")]
-    pub url: String,
+    /// The source, by the name it is configured under or by its URL
+    #[arg(value_name = "NAME|URL")]
+    pub source: String,
 }
 
 /// `spm add-source`.
@@ -190,9 +190,9 @@ pub struct AddSourceArgs {
 /// `spm remove-source`.
 #[derive(Debug, Args)]
 pub struct RemoveSourceArgs {
-    /// The URL of the source, as `spm list-sources` shows it
-    #[arg(value_name = "URL")]
-    pub url: String,
+    /// The source, by the name it is configured under or by its URL
+    #[arg(value_name = "NAME|URL")]
+    pub source: String,
 }
 
 /// `spm create`.

@@ -36,7 +36,7 @@
 use serde::{Deserialize, Serialize};
 
 use crate::error::{Error, Result};
-use crate::model::name::SourceName;
+use crate::model::name::{SourceName, SourceRef};
 use crate::store::{Store, atomic};
 
 /// One configured source.
@@ -138,6 +138,18 @@ impl Sources {
     #[must_use]
     pub fn by_url(&self, url: &str) -> Option<&Source> {
         self.sources.iter().find(|source| source.url == url)
+    }
+
+    /// The source addressed by name or by URL, whichever was given.
+    ///
+    /// What `remove-source` and `source-info` ask, so that neither has to know
+    /// which of the two spellings it was handed.
+    #[must_use]
+    pub fn by_ref(&self, reference: &SourceRef) -> Option<&Source> {
+        match reference {
+            SourceRef::Name(name) => self.by_name(name),
+            SourceRef::Url(url) => self.by_url(url),
+        }
     }
 
     /// The default source, if one is set.

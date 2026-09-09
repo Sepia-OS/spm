@@ -29,6 +29,7 @@ use clap::Parser;
 
 use spm::cli::{Cli, Command};
 use spm::error::Result;
+use spm::model::name::SourceRef;
 use spm::{ops, ui};
 
 fn main() -> ExitCode {
@@ -207,7 +208,10 @@ fn run() -> Result<()> {
             Ok(())
         }
         Command::SourceInfo(args) => {
-            ui::source_info(&ops::query::source_info(&store, &args.url)?);
+            ui::source_info(&ops::query::source_info(
+                &store,
+                &SourceRef::parse(&args.source),
+            )?);
             Ok(())
         }
         Command::AddSource(args) => {
@@ -227,7 +231,10 @@ fn run() -> Result<()> {
         Command::RemoveSource(args) => {
             let _lock = locked(&store)?;
             recover(&store)?;
-            ui::removed_source(&ops::source::remove_source(&store, &args.url)?);
+            ui::removed_source(&ops::source::remove_source(
+                &store,
+                &SourceRef::parse(&args.source),
+            )?);
             Ok(())
         }
         Command::Create(args) => {

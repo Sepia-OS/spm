@@ -25,7 +25,7 @@
 
 use crate::error::{Error, Result};
 use crate::model::index::Index;
-use crate::model::name::SourceName;
+use crate::model::name::{SourceName, SourceRef};
 use crate::net::download;
 use crate::net::transport::Transport;
 use crate::store::config::{Source, Sources};
@@ -183,14 +183,14 @@ pub struct Removed {
 ///
 /// # Errors
 ///
-/// [`Error::SourceNotFound`] if no configured source has that URL, or whatever
-/// reading or writing the state gives.
-pub fn remove_source(store: &Store, url: &str) -> Result<Removed> {
+/// [`Error::SourceNotFound`] if no configured source has that name or URL, or
+/// whatever reading or writing the state gives.
+pub fn remove_source(store: &Store, reference: &SourceRef) -> Result<Removed> {
     let mut sources = Sources::load(store)?;
 
-    let Some(going) = sources.by_url(url).cloned() else {
+    let Some(going) = sources.by_ref(reference).cloned() else {
         return Err(Error::SourceNotFound {
-            name: url.to_owned(),
+            reference: reference.clone(),
         });
     };
 

@@ -154,7 +154,7 @@ fn naming_a_source_that_is_not_configured_is_a_different_answer() {
     );
 
     match find(&store, &reference("nowhere/helix")) {
-        Err(Error::SourceNotFound { name }) => assert_eq!(name, "nowhere"),
+        Err(Error::SourceNotFound { reference }) => assert_eq!(reference.as_str(), "nowhere"),
         other => panic!("expected SourceNotFound, got {other:?}"),
     }
 

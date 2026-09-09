@@ -33,7 +33,7 @@
 //! script that carries on regardless should have to say so deliberately.
 
 use crate::error::{Error, Result};
-use crate::model::name::{PackageName, SourceName};
+use crate::model::name::{PackageName, SourceName, SourceRef};
 use crate::net::transport::Transport;
 use crate::ops::source::fetch_index;
 use crate::store::config::Sources;
@@ -125,7 +125,7 @@ pub fn update(store: &Store, transport: &dyn Transport, which: &Which) -> Result
                 .by_name(name)
                 .cloned()
                 .ok_or_else(|| Error::SourceNotFound {
-                    name: name.as_str().to_owned(),
+                    reference: SourceRef::Name(name.clone()),
                 })?;
             vec![found]
         }

@@ -225,6 +225,66 @@ name_type!(Target, "target");
 
 /// A package, and optionally the source it is to come from.
 ///
+/// How a source was addressed: by the name it is configured under, or by the
+/// URL it publishes at.
+///
+/// `remove-source` and `source-info` used to take a URL and nothing else, which
+/// made them the only commands in the set that did not take a name. They take
+/// either now, and this is what tells the two apart — without a flag, because
+/// nothing has to guess: a name may hold only lower-case letters, digits, `-`,
+/// `_`, `.` and `+`, so a URL, which needs at least a `:` and a `/` for its
+/// scheme, can never be mistaken for one.
+///
+/// **Parsing cannot fail.** Text that is not a valid name is taken as a URL,
+/// and a URL that is not configured is reported as one that is not there. That
+/// is the honest answer either way: `spm source-info sepiaa` should say no
+/// source is named `sepiaa`, not that `sepiaa` is a malformed URL.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum SourceRef {
+    /// The name a source is configured under.
+    Name(SourceName),
+    /// The URL a source publishes its index at.
+    Url(String),
+}
+
+impl SourceRef {
+    /// Read a name or a URL, whichever the text is.
+    #[must_use]
+    pub fn parse(text: &str) -> Self {
+        match SourceName::parse(text) {
+            Ok(name) => SourceRef::Name(name),
+            Err(_) => SourceRef::Url(text.to_owned()),
+        }
+    }
+
+    /// The text as it was given, for a message that has to quote it back.
+    #[must_use]
+    pub fn as_str(&self) -> &str {
+        match self {
+            SourceRef::Name(name) => name.as_str(),
+            SourceRef::Url(url) => url,
+        }
+    }
+
+    /// How to say what was looked for, so an error reads as English.
+    ///
+    /// "no source named 'sepiaa'" and "no source at 'https://…'" are different
+    /// sentences, and a single one would be wrong for half the callers.
+    #[must_use]
+    pub fn describe(&self) -> String {
+        match self {
+            SourceRef::Name(name) => format!("named '{name}'"),
+            SourceRef::Url(url) => format!("at '{url}'"),
+        }
+    }
+}
+
+impl fmt::Display for SourceRef {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(self.as_str())
+    }
+}
+
 /// This is what a user types: `helix`, or `sepia/helix` when more than one
 /// source offers the name. One type parses both spellings so that no command
 /// re-implements the split — and every command needs it, because `install`,
@@ -426,6 +486,56 @@ mod tests {
         assert!(SourceName::parse("sepia").is_ok());
         assert!(SourceName::parse("..").is_err());
         assert_eq!(SourceName::parse("Sepia"), Err(InvalidName::Uppercase));
+    }
+
+    #[test]
+    fn a_source_reference_is_a_name_when_it_could_be_one() {
+        assert_eq!(
+            SourceRef::parse("sepia"),
+            SourceRef::Name(SourceName::parse("sepia").unwrap())
+        );
+        // The characters a name allows, all of them.
+        assert!(matches!(
+            SourceRef::parse("sepia-2.local_test+1"),
+            SourceRef::Name(_)
+        ));
+    }
+
+    #[test]
+    fn anything_a_name_cannot_be_is_taken_as_a_url() {
+        // A URL needs a scheme, and a scheme needs `:` and `/` - neither of
+        // which a name may hold. So the two can never be confused, and no flag
+        // is needed to tell them apart.
+        for url in [
+            "https://example.test/index.json",
+            "http://localhost:8080/i.json",
+            "file:///srv/index.json",
+        ] {
+            assert_eq!(SourceRef::parse(url), SourceRef::Url(url.to_owned()));
+        }
+    }
+
+    #[test]
+    fn text_that_is_neither_is_a_url_and_fails_as_one() {
+        // Upper case is not allowed in a name, so this is read as a URL. It is
+        // not a good URL either, but "no source at 'Sepia'" is a better answer
+        // than a parse error about a name somebody may not have meant to type.
+        assert_eq!(
+            SourceRef::parse("Sepia"),
+            SourceRef::Url("Sepia".to_owned())
+        );
+        assert_eq!(SourceRef::parse(""), SourceRef::Url(String::new()));
+    }
+
+    #[test]
+    fn a_reference_says_which_of_the_two_it_is() {
+        assert_eq!(SourceRef::parse("sepia").describe(), "named 'sepia'");
+        assert_eq!(
+            SourceRef::parse("https://example.test/i.json").describe(),
+            "at 'https://example.test/i.json'"
+        );
+        // And prints as what was typed, for anything quoting it back.
+        assert_eq!(SourceRef::parse("sepia").to_string(), "sepia");
     }
 
     #[test]

@@ -238,7 +238,7 @@ fn listing_from_a_source_that_is_not_configured_says_so() {
     let nowhere = SourceName::parse("nowhere").unwrap();
 
     match list(&store, &target(), false, Some(&nowhere)) {
-        Err(Error::SourceNotFound { name }) => assert_eq!(name, "nowhere"),
+        Err(Error::SourceNotFound { reference }) => assert_eq!(reference.as_str(), "nowhere"),
         other => panic!("expected SourceNotFound, got {other:?}"),
     }
 }

@@ -42,6 +42,7 @@
 
 use std::path::PathBuf;
 
+use crate::model::name::SourceRef;
 use thiserror::Error;
 
 /// Everything that can go wrong, and enough context with it to act.
@@ -108,11 +109,12 @@ pub enum Error {
         name: String,
     },
 
-    /// No source is configured under this name.
-    #[error("no source named '{name}' - 'spm list-sources' shows the configured ones")]
+    /// No source is configured under this name, or at this URL.
+    #[error("no source {} - 'spm list-sources' shows the configured ones", .reference.describe())]
     SourceNotFound {
-        /// The name that was asked for.
-        name: String,
+        /// How the source was addressed, so the message can say which of the
+        /// two was looked for rather than guessing at one wording for both.
+        reference: SourceRef,
     },
 
     /// The package exists, but not at that version.
@@ -388,7 +390,7 @@ mod tests {
             ),
             (
                 Error::SourceNotFound {
-                    name: "sepia".to_owned(),
+                    reference: SourceRef::parse("sepia"),
                 },
                 3,
             ),

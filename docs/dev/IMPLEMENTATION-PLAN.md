@@ -1467,11 +1467,16 @@ instead. The behaviour is in [ARCHITECTURE.md](ARCHITECTURE.md) under
 *Configuration* and the mechanism in [DESIGN.md](DESIGN.md) under *Configuration
 files*.
 
+**Addressing a source by name has been done** and is no longer on this list.
+`remove-source` and `source-info` take the name a source is configured under as
+well as its URL, told apart without a flag because a name cannot hold the `:`
+and `/` a URL's scheme needs. `add-source` still takes a URL, and that is not
+the same inconsistency: a source that has not been added yet has no name to be
+addressed by.
+
 - **Signing an index.** The digest chain protects a download from the network,
   not a device from a source that has been taken over. Signing, with a key
   pinned per source in `sources.json`, is the next layer and wants designing
   before it is built.
 - **A `verify` command** to re-check installed files against their records. The
   data is already there; the command is not specified.
-- **Addressing a source by name** in `add-source`, `remove-source` and
-  `source-info`, which take a URL while every other command takes a name.
