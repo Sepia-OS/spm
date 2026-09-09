@@ -98,13 +98,14 @@ pub struct Replaced {
     /// The files it put on the device, so that the ones the new version does
     /// not ship can be taken away rather than left behind owned by nobody.
     pub files: Vec<PathBuf>,
-    /// The digests of its configuration files, as that version wrote them.
+    /// The digests of its files, as that version wrote them.
     ///
     /// What decides whether an upgrade may replace a configuration file: if
     /// what is on the card still hashes to this, nobody has touched it and the
     /// new default goes in; if it does not, the file is somebody's work and the
-    /// new default is written beside it instead.
-    pub config: BTreeMap<PathBuf, Sha256>,
+    /// new default is written beside it instead. Files under `usr/` are in here
+    /// too and take no part in that decision - the package owns them.
+    pub digests: BTreeMap<PathBuf, Sha256>,
 }
 
 /// One package an install would put on the device.
@@ -222,7 +223,7 @@ pub fn plan_for(store: &Store, needed: Vec<Needed>) -> Result<Plan> {
                 version: record.metadata.version.clone(),
                 source: record.source.clone(),
                 files: record.files.clone(),
-                config: record.config.clone(),
+                digests: record.digests.clone(),
             }),
             None => Change::New,
         };
@@ -404,7 +405,7 @@ fn one(store: &Store, transport: &dyn Transport, step: &Step) -> Result<Vec<Path
     // configuration. An install onto a card that has none of this package leaves
     // it empty, and then nothing below diverts anything.
     let previously = match &step.change {
-        Change::Replaces(replaced) => replaced.config.clone(),
+        Change::Replaces(replaced) => replaced.digests.clone(),
         Change::New => BTreeMap::new(),
     };
 
@@ -448,10 +449,10 @@ fn one(store: &Store, transport: &dyn Transport, step: &Step) -> Result<Vec<Path
         reason: step.reason,
         installed_at: now(),
         files,
-        // Filled in below, once the files exist: the digest of a configuration
-        // file is of what was written, and until the extraction has run there
-        // is nothing to hash.
-        config: BTreeMap::new(),
+        // Filled in below, from what the extraction reports: a digest is of
+        // the bytes as they were written, and until the extraction has run
+        // there is nothing to have written them.
+        digests: BTreeMap::new(),
     };
 
     // The journal, then the files, then the record. In that order an install
@@ -460,34 +461,35 @@ fn one(store: &Store, transport: &dyn Transport, step: &Step) -> Result<Vec<Path
     // did, which is what makes it a list to undo rather than a tally to finish.
     let database = Database::new(store);
     database.begin(&record)?;
-    with_payload(&archive, |payload| {
+    let written = with_payload(&archive, |payload| {
         unpack::extract(payload, &archive, store.root(), &keep)
     })?;
 
-    // Now the configuration digests, because now there are files to take them
-    // of. A file that was written gets the digest of what was written; a file
-    // that was diverted around keeps the digest it already had, so that it
-    // stays "edited" for every upgrade after this one. Recording the
-    // administrator's own bytes instead would make the next upgrade believe
-    // nobody had touched it and overwrite it, which is the single outcome this
-    // whole mechanism exists to prevent.
-    for entry in &recorded {
-        if !entry.is_config_file() {
-            continue;
-        }
-        let digest = if keep.contains(&entry.path) {
-            previously.get(&entry.path).cloned()
-        } else {
-            conffile::digest_of(&store.root().join(&entry.path))?
-        };
-        if let Some(digest) = digest {
-            record.config.insert(entry.path.clone(), digest);
+    // The digests, as the extraction took them on the way past. Every regular
+    // file it wrote is here; symlinks report none, having no contents of their
+    // own.
+    for one in written {
+        if let Some(digest) = one.digest {
+            record.digests.insert(one.path, digest);
         }
     }
+
+    // A configuration file that was diverted around was not written, so the
+    // extraction reported nothing for it - and it keeps the digest it already
+    // had, so that it stays "edited" for every upgrade after this one.
+    // Recording the administrator's own bytes instead would make the next
+    // upgrade believe nobody had touched it and overwrite it, which is the
+    // single outcome this whole mechanism exists to prevent.
+    for path in &keep {
+        if let Some(digest) = previously.get(path) {
+            record.digests.insert(path.clone(), digest.clone());
+        }
+    }
+
     // The journal is rewritten with the digests in it before it is committed.
     // Safe to do between the extraction and the commit because the amendment
-    // adds only `config`: the file list an undo walks is exactly what it was, so
-    // a crash on either side of this leaves the same recoverable state.
+    // adds only `digests`: the file list an undo walks is exactly what it was,
+    // so a crash on either side of this leaves the same recoverable state.
     database.begin(&record)?;
     database.commit(&selected.name)?;
 
@@ -702,7 +704,7 @@ fn superseded(store: &Store, record: &Record, replaced: &Replaced) -> Result<()>
         // A configuration file the administrator has edited is not the old
         // version's to take away, even though the new version stopped shipping
         // it. The same question `remove` and the rollback ask.
-        if !conffile::may_delete(store.root(), file, &replaced.config)? {
+        if !conffile::may_delete(store.root(), file, &replaced.digests)? {
             continue;
         }
 

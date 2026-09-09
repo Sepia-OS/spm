@@ -53,13 +53,16 @@
 //! removed again.
 
 use std::fs::{self, File};
-use std::io::{self, BufWriter, Read};
+use std::io::{self, BufWriter, Read, Write};
 use std::path::{Component, Path, PathBuf};
 
 use std::collections::BTreeSet;
 
+use sha2::{Digest, Sha256 as Hasher};
+
 use crate::conffile;
 use crate::error::{Error, Result};
+use crate::model::metadata::Sha256;
 
 /// What one entry in a payload is.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -80,6 +83,21 @@ pub enum Kind {
         /// The link's target, as the archive spells it.
         target: PathBuf,
     },
+}
+
+/// One thing an extraction put on the device.
+///
+/// The digest is of the bytes as they were written, taken *during* the write
+/// rather than by reading the file back: a package is 216 MiB on an SD card and
+/// a second pass over it to hash what was just streamed past would roughly
+/// double what an install costs. `None` for a symlink, which has no contents of
+/// its own - what it points at belongs to whatever is at the other end.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Written {
+    /// Where it went, relative to the device's root.
+    pub path: PathBuf,
+    /// The digest of what was written, for a regular file.
+    pub digest: Option<Sha256>,
 }
 
 /// One entry of a payload that broke none of the rules.
@@ -150,7 +168,7 @@ pub fn extract(
     from: &Path,
     root: &Path,
     keep: &BTreeSet<PathBuf>,
-) -> Result<Vec<PathBuf>> {
+) -> Result<Vec<Written>> {
     // On a device this is `/` and has been there since the card was written.
     // Making it is for the tests, which unpack into a directory that does not
     // exist yet, and costs nothing when it already does.
@@ -169,9 +187,12 @@ pub fn extract(
         if keep.contains(&entry.path) {
             entry.path = conffile::diverted(&entry.path);
         }
-        write_entry(root, &entry, contents)?;
+        let digest = write_entry(root, &entry, contents)?;
         if entry.is_recorded() {
-            written.push(entry.path);
+            written.push(Written {
+                path: entry.path,
+                digest,
+            });
         }
         Ok(())
     })?;
@@ -404,27 +425,27 @@ fn describe(kind: tar::EntryType) -> &'static str {
 }
 
 /// Write one entry, following nothing on the way.
-fn write_entry(root: &Path, entry: &Entry, contents: &mut dyn Read) -> Result<()> {
+fn write_entry(root: &Path, entry: &Entry, contents: &mut dyn Read) -> Result<Option<Sha256>> {
     let destination = root.join(&entry.path);
 
     match &entry.kind {
         Kind::Directory { mode } => {
             make_directory(root, &entry.path)?;
             set_directory_mode(&destination, *mode)?;
+            Ok(None)
         }
         Kind::File { mode } => {
             make_directory(root, parent_of(&entry.path))?;
             clear(&destination)?;
-            write_file(&destination, *mode, contents)?;
+            write_file(&destination, *mode, contents).map(Some)
         }
         Kind::Symlink { target } => {
             make_directory(root, parent_of(&entry.path))?;
             clear(&destination)?;
             make_symlink(target, &destination)?;
+            Ok(None)
         }
     }
-
-    Ok(())
 }
 
 /// Write one file, with the permissions the archive asked for.
@@ -435,23 +456,68 @@ fn write_entry(root: &Path, entry: &Entry, contents: &mut dyn Read) -> Result<()
 ///
 /// Buffered, because a package is 11,000 files on an SD card and unbuffered
 /// per-entry writes are the difference between seconds and minutes.
-fn write_file(destination: &Path, mode: u32, contents: &mut dyn Read) -> Result<()> {
+fn write_file(destination: &Path, mode: u32, contents: &mut dyn Read) -> Result<Sha256> {
     let file = File::create_new(destination).map_err(|source| Error::Io {
         path: destination.to_path_buf(),
         source,
     })?;
 
-    let mut sink = BufWriter::new(file);
+    // The hasher sits between the copy and the file, so what is hashed is
+    // exactly what lands on the card, and it costs one pass rather than two.
+    let mut sink = Hashing {
+        inner: BufWriter::new(file),
+        hasher: Hasher::new(),
+    };
     io::copy(contents, &mut sink).map_err(|source| Error::Io {
         path: destination.to_path_buf(),
         source,
     })?;
-    let file = sink.into_inner().map_err(|error| Error::Io {
+
+    let Hashing { inner, hasher } = sink;
+    let digest = hex(&hasher.finalize());
+    let file = inner.into_inner().map_err(|error| Error::Io {
         path: destination.to_path_buf(),
         source: error.into_error(),
     })?;
 
-    set_mode(&file, destination, mode)
+    set_mode(&file, destination, mode)?;
+
+    Sha256::parse(&digest).ok_or_else(|| Error::Io {
+        path: destination.to_path_buf(),
+        source: io::Error::other("the digest of what was written is not a digest"),
+    })
+}
+
+/// A writer that hashes everything on its way past.
+struct Hashing<W: Write> {
+    inner: W,
+    hasher: Hasher,
+}
+
+impl<W: Write> Write for Hashing<W> {
+    fn write(&mut self, buffer: &[u8]) -> io::Result<usize> {
+        let written = self.inner.write(buffer)?;
+        // Only what the inner writer accepted, so a short write hashes exactly
+        // the bytes that reached the file.
+        if let Some(taken) = buffer.get(..written) {
+            self.hasher.update(taken);
+        }
+        Ok(written)
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        self.inner.flush()
+    }
+}
+
+/// A digest as the lower-case hexadecimal the rest of the program uses.
+fn hex(bytes: &[u8]) -> String {
+    use std::fmt::Write as _;
+
+    bytes.iter().fold(String::new(), |mut text, byte| {
+        let _ = write!(text, "{byte:02x}");
+        text
+    })
 }
 
 /// Ownership is deliberately not touched; permissions are.
@@ -700,6 +766,13 @@ mod tests {
         inspect(File::open(archive).unwrap(), archive)
     }
 
+    /// Just the paths, for a test that is not about digests.
+    fn paths(written: &[Written]) -> Vec<PathBuf> {
+        written.iter().map(|one| one.path.clone()).collect()
+    }
+
+    /// The paths an extraction wrote, which is what most of these tests are
+    /// about. The digests have their own test below.
     fn extracting_into(archive: &Path, root: &Path) -> Result<Vec<PathBuf>> {
         extract(
             File::open(archive).unwrap(),
@@ -707,6 +780,7 @@ mod tests {
             root,
             &BTreeSet::new(),
         )
+        .map(|written| written.into_iter().map(|one| one.path).collect())
     }
 
     /// What refusing an entry said, or a failure naming what happened instead.
@@ -891,7 +965,7 @@ mod tests {
             &BTreeSet::new(),
         )
         .expect("a package may ship configuration under etc/");
-        assert_eq!(written, vec![PathBuf::from("etc/helix.conf")]);
+        assert_eq!(paths(&written), vec![PathBuf::from("etc/helix.conf")]);
         assert_eq!(fs::read(root.join("etc/helix.conf")).unwrap(), b"theme\n");
     }
 
@@ -918,7 +992,10 @@ mod tests {
             fs::read(root.join("etc/helix.conf.spmnew")).unwrap(),
             b"theirs\n"
         );
-        assert_eq!(written, vec![PathBuf::from("etc/helix.conf.spmnew")]);
+        assert_eq!(
+            paths(&written),
+            vec![PathBuf::from("etc/helix.conf.spmnew")]
+        );
     }
 
     #[test]

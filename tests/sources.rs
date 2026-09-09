@@ -79,7 +79,7 @@ fn installed_from(store: &Store, built: &Built, source: &str) {
         reason: Reason::Explicit,
         installed_at: 1,
         files: Vec::new(),
-        config: BTreeMap::new(),
+        digests: BTreeMap::new(),
     };
     let db = Database::new(store);
     db.begin(&record).unwrap();

@@ -183,11 +183,16 @@ pub fn is_untouched(path: &Path, installed: Option<&Sha256>) -> Result<bool> {
 pub fn may_delete(
     root: &Path,
     relative: &Path,
-    config: &BTreeMap<PathBuf, Sha256>,
+    digests: &BTreeMap<PathBuf, Sha256>,
 ) -> Result<bool> {
-    match config.get(relative) {
-        // Not a configuration file this record knows about, so it is the
-        // package's outright.
+    // Only `etc/` is anybody else's. A file under `usr/` belongs to the package
+    // that put it there whatever has happened to it since, and a record now
+    // carries a digest for that too - so the question has to be asked of the
+    // path rather than of whether a digest exists.
+    if !is_config(relative) {
+        return Ok(true);
+    }
+    match digests.get(relative) {
         None => Ok(true),
         Some(installed) => is_untouched(&root.join(relative), Some(installed)),
     }
@@ -311,18 +316,39 @@ mod tests {
         fs::write(root.path().join(&relative), b"shipped\n").unwrap();
         let shipped = digest_of(&root.path().join(&relative)).unwrap().unwrap();
 
-        let mut config = BTreeMap::new();
-        config.insert(relative.clone(), shipped);
+        let mut digests = BTreeMap::new();
+        digests.insert(relative.clone(), shipped);
 
         // Untouched: it is still the package's to take away.
-        assert!(may_delete(root.path(), &relative, &config).unwrap());
+        assert!(may_delete(root.path(), &relative, &digests).unwrap());
 
         // Edited: it is the administrator's now, and nothing removes it.
         fs::write(root.path().join(&relative), b"mine\n").unwrap();
-        assert!(!may_delete(root.path(), &relative, &config).unwrap());
+        assert!(!may_delete(root.path(), &relative, &digests).unwrap());
 
         // A file the record says nothing about is not configuration at all.
-        assert!(may_delete(root.path(), Path::new("usr/bin/x"), &config).unwrap());
+        assert!(may_delete(root.path(), Path::new("usr/bin/x"), &digests).unwrap());
+    }
+
+    #[test]
+    fn a_changed_file_under_usr_is_still_the_packages_to_delete() {
+        // The rule that changed when every file gained a digest: a record now
+        // has one for `usr/bin/x` too, and a mismatch there means corruption
+        // rather than somebody's work. It must not stop a removal.
+        let root = tempfile::tempdir().unwrap();
+        fs::create_dir_all(root.path().join("usr/bin")).unwrap();
+        let relative = PathBuf::from("usr/bin/x");
+        fs::write(root.path().join(&relative), b"installed\n").unwrap();
+        let installed = digest_of(&root.path().join(&relative)).unwrap().unwrap();
+
+        let mut digests = BTreeMap::new();
+        digests.insert(relative.clone(), installed);
+
+        fs::write(root.path().join(&relative), b"something else\n").unwrap();
+        assert!(
+            may_delete(root.path(), &relative, &digests).unwrap(),
+            "usr/ belongs to the package whatever has happened to it"
+        );
     }
 
     #[test]

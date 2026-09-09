@@ -294,15 +294,15 @@ can act on:
 
 ```console
 $ spm verify
-  helix     25.07.1   412 files, 1 missing or not a file
+  helix     25.07.1   412 files, 1 wrong
       /usr/bin/hx  - missing
 spm: 1 file of 1 installed package is missing or no longer a file
 $ echo $?
 6
 ```
 
-A file goes missing when something took it — a hand, an operation that did not
-finish, a card that lost a block. Reinstalling the package puts it back.
+A file goes missing when something took it — a hand, or an operation that did not
+finish. Reinstalling the package puts it back.
 
 **An edited configuration file is not a fault**, and `verify` says so rather than
 failing:
@@ -317,11 +317,22 @@ Everything installed is present. 1 configuration file is edited, which is not a 
 That is the expected result of configuring a device, and `verify` is the only
 command that will tell you which files you have changed.
 
-**What `verify` cannot tell you is whether a file's contents are still right.**
-`spm` records a checksum for configuration files and for nothing else, so a
-program under `/usr` that was quietly corrupted looks present and correct here.
-If you suspect that, reinstall the package: the download is checked against two
-checksums before anything is unpacked.
+`verify` checks contents, not just that files are there. `spm` records the
+checksum of every file as it installs it, so a program that was quietly
+corrupted — a card that lost a block, most likely — is found here rather than the
+next time you run it:
+
+```console
+$ spm verify
+  helix     25.07.1   412 files, 1 wrong
+      /usr/bin/hx  - contents are not what was installed
+spm: 1 file of 1 installed package is missing or no longer a file
+```
+
+Reinstalling the package puts it right.
+
+A symlink is checked for being there and still being a link, and no further: it
+has no contents of its own.
 
 ## Managing sources
 

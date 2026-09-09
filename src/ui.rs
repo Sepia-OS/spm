@@ -426,7 +426,7 @@ pub fn verified(report: &crate::ops::verify::Report) {
         } else {
             let mut parts = Vec::new();
             if package.faults() > 0 {
-                parts.push(format!("{} missing or not a file", package.faults()));
+                parts.push(format!("{} wrong", package.faults()));
             }
             if package.edited() > 0 {
                 parts.push(format!("{} edited", package.edited()));
@@ -445,6 +445,7 @@ pub fn verified(report: &crate::ops::verify::Report) {
             let what = match checked.finding {
                 Finding::Missing => "missing",
                 Finding::NotAFile => "not a file any more",
+                Finding::Modified => "contents are not what was installed",
                 Finding::Edited => "edited since it was installed",
             };
             println!("      /{}  - {what}", checked.path.display());

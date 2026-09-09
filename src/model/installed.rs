@@ -72,22 +72,26 @@ pub struct Record {
     /// written into it. A package carrying such a path therefore cannot be
     /// recorded, so `install` has to refuse one — see the extraction rules.
     pub files: Vec<PathBuf>,
-    /// The digest of each configuration file, as `spm` wrote it.
+    /// The digest of each file, as `spm` wrote it.
     ///
-    /// Only paths under `etc/` appear here, and only regular files. Everything
-    /// under `usr/` belongs to the package outright, so there is nothing to
-    /// compare and nothing to decide.
+    /// Every regular file in `files` appears here. A symlink does not: it has
+    /// no contents of its own, and hashing what it points at would be a digest
+    /// of somebody else's file.
     ///
-    /// This is what tells an edited file from an untouched one later: `upgrade`
-    /// and `remove` hash what is on the card and compare it against the digest
-    /// recorded here. See [`crate::conffile`] for the policy that follows from
-    /// the answer.
+    /// Taken during the extraction rather than by reading the card back
+    /// afterwards, so an install still makes one pass over a package rather
+    /// than two.
     ///
-    /// `#[serde(default)]` because a record written before configuration files
-    /// existed has no such key, and a device that cannot read its own older
-    /// records is a device that cannot be upgraded.
+    /// It answers two different questions, and which one depends on where the
+    /// file is. Under `usr/` the package owns the file outright, so a digest
+    /// that no longer matches means the contents changed underneath it -
+    /// corruption, or a hand - and `verify` calls that a fault. Under `etc/` the
+    /// same mismatch means somebody edited a default, which is not a fault at
+    /// all and is what [`crate::conffile`] protects. One map, because it is one
+    /// fact; two readings, because `usr/` and `etc/` are owned by different
+    /// people.
     #[serde(default)]
-    pub config: BTreeMap<PathBuf, Sha256>,
+    pub digests: BTreeMap<PathBuf, Sha256>,
 }
 
 impl Record {

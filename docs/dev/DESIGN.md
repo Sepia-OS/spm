@@ -156,7 +156,11 @@ anything is fetched.
   "reason": "explicit",
   "installed_at": 1757260800,
   "files": [ "usr/bin/hx", "usr/lib/helix/runtime/grammars/rust.so", "etc/helix.conf" ],
-  "config": { "etc/helix.conf": "9f2c…" }
+  "digests": {
+    "usr/bin/hx": "4a1e…",
+    "usr/lib/helix/runtime/grammars/rust.so": "b70d…",
+    "etc/helix.conf": "9f2c…"
+  }
 }
 ```
 
@@ -165,10 +169,25 @@ anything is fetched.
 written, so undoing an install is walking the list backwards. Directories are
 not listed: they are removed when they empty out.
 
-`config` holds the digest of each configuration file **as `spm` wrote it**, and
-only paths under `etc/` appear in it. It is absent from records written before
-configuration files existed, and reads as empty, so an older device can still be
-upgraded. What it is for is the next section.
+`digests` holds the digest of each file **as `spm` wrote it** — every regular
+file in `files`, not only configuration. A symlink has no entry: it has no
+contents of its own, and hashing what it points at would be a digest of somebody
+else's file.
+
+The digests are taken **during** the extraction, by a writer that hashes on the
+way past, rather than by reading the card back afterwards. A package is 216 MiB
+on an SD card and a second pass over it would roughly double what an install
+costs.
+
+**It costs what it costs, and the number is measured rather than guessed:** 176
+bytes of record per installed file, of which the digest is about 121 and the
+path in `files` the rest. For a package the size of Helix — some eleven thousand
+files — that is about 1.9 MB of record, 1.3 MB of it these digests. On a 2 GiB
+card that is the price of being able to tell a corrupted binary from a sound
+one, and it was judged worth paying.
+
+One map, and two readings of it. Which one applies is decided by where the file
+is, and that is the next section.
 
 ### Configuration files
 
@@ -179,7 +198,7 @@ may change it.
 
 So every decision about an `etc/` file asks one question first — *is this still
 the bytes we wrote?* — by hashing what is on the card and comparing it against
-`config`. Two answers, and the whole policy follows from them:
+`digests`. Two answers, and the whole policy follows from them:
 
 - **Untouched.** Nobody wanted it, so it is a stale default: replaced on
   upgrade, deleted on remove, exactly like anything under `usr/`.
@@ -189,6 +208,13 @@ the bytes we wrote?* — by hashing what is on the card and comparing it against
   original name stays legible and two files differing only by extension cannot
   collide — and both the upgrade and the removal name the files they left, since
   a file nobody is told about is a decision nobody will make.
+
+**Only `etc/` gets this protection.** A record now carries a digest for files
+under `usr/` too, and a mismatch there means the opposite thing — the package
+owns that file, so contents that changed underneath it are damage rather than a
+decision. `conffile::may_delete` therefore asks where the file is before it asks
+whether it matches; a digest existing is no longer what makes a file somebody
+else's.
 
 **The recorded digest is of what was shipped, never of the edit.** Once a file
 has been diverted the record keeps the digest it already had, so it stays edited
@@ -504,9 +530,3 @@ What `spm` trusts, and what it does not:
   network; it does not protect the device from a source that has been taken
   over. Signing the index, and pinning a key per source in `sources.json`, is
   the obvious next layer.
-- **`verify` checks presence and kind, not contents.** A record carries a digest
-  for configuration files only, so nothing can tell a corrupted binary from a
-  sound one. Recording a digest per installed file would close that, at roughly
-  eleven thousand entries for a package the size of Helix; whether a device
-  should spend that on its card is the open question, not whether the check is
-  worth having.

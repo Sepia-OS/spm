@@ -31,19 +31,19 @@
 //! - **Not a file any more.** Records list files and symlinks and never
 //!   directories, so a directory at a recorded path is something else standing
 //!   where the package's file should be. A fault.
-//! - **Edited configuration.** A file under `etc/` that no longer hashes to what
-//!   was installed. **Not** a fault: it is the expected result of somebody
-//!   administering the device, and the reason `crate::conffile` exists.
-//!   Reported because `verify` is the only place to find out which files they
-//!   are.
+//! - **Modified.** The file is there and its contents are not what was
+//!   installed. A fault, and the one this command exists for: a record carries
+//!   the digest of every file as it was written, so a binary that lost a block
+//!   to a tired card is found here rather than when somebody runs it.
+//! - **Edited configuration.** A file under `etc/` whose contents differ in
+//!   exactly the same way - and **not** a fault, because it is the expected
+//!   result of somebody administering the device and the reason
+//!   `crate::conffile` exists. The mismatch is identical; where the file lives
+//!   is what says which of the two it means.
 //!
-//! **What this cannot do is tell a corrupted file from a sound one.** A record
-//! carries a digest for configuration and nothing else, so a binary under `usr/`
-//! is checked for being present and being a file, and not for being right.
-//! Closing that means a digest per installed file - eleven thousand of them for
-//! a package the size of Helix - which is a decision about the record format
-//! rather than about this command. `docs/dev/DESIGN.md` records it as the open
-//! question it is.
+//! **A symlink is checked for being there and for still being a link**, and no
+//! further: it has no contents of its own, and hashing what it points at would
+//! report on somebody else's file.
 
 use std::fs;
 use std::path::PathBuf;
@@ -63,6 +63,13 @@ pub enum Finding {
     Missing,
     /// Something that is not a file stands where the file should.
     NotAFile,
+    /// The file is there and its contents are not what was installed.
+    ///
+    /// Under `usr/` that is a fault: the package owns the file, so something
+    /// changed it underneath - a card that lost a block, or a hand. It is
+    /// [`Finding::Edited`] rather than this when the file is configuration,
+    /// where the same mismatch is somebody doing their job.
+    Modified,
     /// Configuration that no longer matches what was installed.
     ///
     /// Not a fault. It is what an administrator editing a default looks like.
@@ -77,7 +84,10 @@ impl Finding {
     /// configured their device would be a `verify` nobody ran twice.
     #[must_use]
     pub fn is_fault(&self) -> bool {
-        matches!(self, Finding::Missing | Finding::NotAFile)
+        matches!(
+            self,
+            Finding::Missing | Finding::NotAFile | Finding::Modified
+        )
     }
 }
 
@@ -236,7 +246,12 @@ fn one(store: &Store, record: &Record) -> Result<Verified> {
             Err(source) => return Err(Error::Io { path: full, source }),
         };
 
-        if found.is_dir() {
+        // A record holds a digest for every regular file it wrote, so having
+        // one means the thing installed here was a file. Anything else standing
+        // in its place now - a directory, or a symlink where a file was - is
+        // something other than the package's file, whatever else is true.
+        let installed = record.digests.get(path);
+        if found.is_dir() || (installed.is_some() && !found.is_file()) {
             findings.push(Checked {
                 path: path.clone(),
                 finding: Finding::NotAFile,
@@ -244,14 +259,19 @@ fn one(store: &Store, record: &Record) -> Result<Verified> {
             continue;
         }
 
-        // Only configuration has a digest to be checked against, and only a
-        // difference from what was installed is worth saying.
-        if let Some(installed) = record.config.get(path)
+        // The contents. A symlink has no digest and nothing to compare; for
+        // everything else a mismatch means one of two different things, and
+        // where the file lives is what says which.
+        if let Some(installed) = installed
             && !conffile::is_untouched(&full, Some(installed))?
         {
             findings.push(Checked {
                 path: path.clone(),
-                finding: Finding::Edited,
+                finding: if conffile::is_config(path) {
+                    Finding::Edited
+                } else {
+                    Finding::Modified
+                },
             });
         }
     }

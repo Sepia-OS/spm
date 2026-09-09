@@ -216,6 +216,91 @@ fn an_untouched_configuration_file_says_nothing() {
 }
 
 #[test]
+fn a_file_whose_contents_changed_is_a_fault() {
+    // The whole point of recording a digest per file: the file is present, is
+    // the right kind, and is wrong. Nothing before this could tell.
+    let fixture = Fixture::new();
+    let store = installed(&fixture, Package::named("helix"));
+    let path = fixture.root().join("usr/bin/helix");
+    fs::write(&path, b"not what was installed\n").unwrap();
+
+    let report = verify(&store, None).unwrap();
+
+    assert!(!report.is_sound());
+    assert_eq!(report.faults(), 1);
+    let found = &report.packages[0].findings;
+    assert_eq!(found[0].path, Path::new("usr/bin/helix"));
+    assert_eq!(found[0].finding, Finding::Modified);
+}
+
+#[test]
+fn the_same_mismatch_under_etc_is_an_edit_rather_than_a_fault() {
+    // One map, two readings. The bytes differ in exactly the same way; where
+    // the file lives is the whole difference.
+    let fixture = Fixture::new();
+    let store = installed(
+        &fixture,
+        Package::named("helix").file("etc/helix.conf", b"theme = default\n"),
+    );
+    fs::write(fixture.root().join("etc/helix.conf"), b"changed\n").unwrap();
+    fs::write(fixture.root().join("usr/bin/helix"), b"changed\n").unwrap();
+
+    let report = verify(&store, None).unwrap();
+
+    assert_eq!(report.faults(), 1, "only the one under usr/");
+    assert_eq!(report.edited(), 1);
+    let kinds: Vec<&Finding> = report.packages[0]
+        .findings
+        .iter()
+        .map(|checked| &checked.finding)
+        .collect();
+    assert!(kinds.contains(&&Finding::Modified));
+    assert!(kinds.contains(&&Finding::Edited));
+}
+
+#[test]
+fn a_digest_is_recorded_for_every_file_a_package_ships() {
+    let fixture = Fixture::new();
+    let store = installed(
+        &fixture,
+        Package::named("helix")
+            .file("usr/share/helix/theme.toml", b"x\n")
+            .file("etc/helix.conf", b"y\n"),
+    );
+
+    let record = spm::store::db::Database::new(&store)
+        .get(&spm::model::name::PackageName::parse("helix").unwrap())
+        .unwrap()
+        .unwrap();
+
+    // Every recorded path has a digest, except any symlink - which has no
+    // contents of its own to hash.
+    for path in &record.files {
+        let full = fixture.root().join(path);
+        if full.symlink_metadata().unwrap().is_symlink() {
+            assert!(!record.digests.contains_key(path), "{path:?} is a link");
+        } else {
+            assert!(record.digests.contains_key(path), "{path:?} has no digest");
+        }
+    }
+    assert!(record.digests.len() >= 3);
+}
+
+#[test]
+fn a_truncated_file_is_caught_even_though_it_is_still_there() {
+    // The failure a card actually produces: the file exists, the size is
+    // different, nothing about the filesystem looks wrong.
+    let fixture = Fixture::new();
+    let store = installed(&fixture, Package::named("helix"));
+    fs::write(fixture.root().join("usr/bin/helix"), b"").unwrap();
+
+    let report = verify(&store, None).unwrap();
+
+    assert!(!report.is_sound());
+    assert_eq!(report.packages[0].findings[0].finding, Finding::Modified);
+}
+
+#[test]
 fn one_package_can_be_checked_on_its_own() {
     let fixture = Fixture::new();
     let store = fixture.store();
