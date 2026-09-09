@@ -420,8 +420,9 @@ mod tests {
             ),
             (
                 Error::NotPackageable {
-                    path: PathBuf::from("etc/motd"),
-                    reason: "everything in a package has to be under usr/".to_owned(),
+                    path: PathBuf::from("var/lib/helix"),
+                    reason: "everything in a package has to be under one of the writable roots"
+                        .to_owned(),
                 },
                 2,
             ),
@@ -500,7 +501,8 @@ mod tests {
             (
                 Error::UnsafeEntry {
                     path: PathBuf::from("../../etc/passwd"),
-                    reason: "a package may only write under usr/".to_owned(),
+                    reason: "it walks up out of the directory it is unpacked into with '..'"
+                        .to_owned(),
                 },
                 6,
             ),

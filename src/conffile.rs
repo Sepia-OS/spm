@@ -19,12 +19,13 @@
 
 //! Configuration files: the ones a package ships and an administrator edits.
 //!
-//! Everything under `usr/` belongs to the package that put it there, and `spm`
-//! may replace or delete it without asking. `etc/` is the one place where that
-//! is not true: a package ships a *default* there, and the whole point of the
-//! file is that somebody may change it. So every rule the rest of the program
-//! applies to a file - replace it on upgrade, delete it on remove - has to ask
-//! one more question first, and this module is that question.
+//! Everything a package ships belongs to the package that put it there, and
+//! `spm` may replace or delete it without asking - whichever of
+//! [`crate::layout`]'s roots it landed in. `etc/` is the one place where that is
+//! not true: a package ships a *default* there, and the whole point of the file
+//! is that somebody may change it. So every rule the rest of the program applies
+//! to a file - replace it on upgrade, delete it on remove - has to ask one more
+//! question first, and this module is that question.
 //!
 //! **The answer is a digest, recorded at install time.** A record carries the
 //! SHA-256 of each configuration file *as `spm` wrote it*. Later, comparing
@@ -35,8 +36,8 @@
 //! Two consequences, and they are the whole of the policy:
 //!
 //! - **An untouched file is `spm`'s.** It is replaced on upgrade and deleted on
-//!   remove, exactly like anything under `usr/`, because leaving it would only
-//!   leave a stale default behind.
+//!   remove, exactly like anything the package owns outright, because leaving it
+//!   would only leave a stale default behind.
 //! - **An edited file is the administrator's.** It is never overwritten and
 //!   never deleted. On upgrade the new default is written beside it with
 //!   [`SUFFIX`] appended, so the change is on the card to be looked at rather
@@ -79,8 +80,9 @@ pub const LARGEST: u64 = 16 * 1024 * 1024;
 
 /// Whether this path is a configuration file rather than a package's own.
 ///
-/// A path under `etc/`, and only that. Everything else in a package is owned
-/// outright by the package that shipped it.
+/// A path under `etc/`, and only that. Everything else in a package - under
+/// `bin/`, `sbin/`, `lib/` or `usr/` - is owned outright by the package that
+/// shipped it.
 #[must_use]
 pub fn is_config(path: &Path) -> bool {
     matches!(path.components().next(), Some(Component::Normal(first)) if first == ETC)
@@ -185,9 +187,9 @@ pub fn may_delete(
     relative: &Path,
     digests: &BTreeMap<PathBuf, Sha256>,
 ) -> Result<bool> {
-    // Only `etc/` is anybody else's. A file under `usr/` belongs to the package
-    // that put it there whatever has happened to it since, and a record now
-    // carries a digest for that too - so the question has to be asked of the
+    // Only `etc/` is anybody else's. A file under any other root belongs to the
+    // package that put it there whatever has happened to it since, and a record
+    // now carries a digest for that too - so the question has to be asked of the
     // path rather than of whether a digest exists.
     if !is_config(relative) {
         return Ok(true);

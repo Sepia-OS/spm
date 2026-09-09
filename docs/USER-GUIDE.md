@@ -594,9 +594,16 @@ index picks it up — on notification if it can, and on its next scan regardless
 There is nothing else to register.
 
 `create` will refuse to build a package that could not be installed safely:
-everything must be under `usr/`, there must be a licence under
-`usr/share/licenses/<name>/`, there must be no libc or dynamic loader in the
-tree, and the metadata must name the package.
+everything must be under `bin/`, `etc/`, `lib/`, `sbin/` or `usr/`, there must
+be a licence under `usr/share/licenses/<name>/`, and the metadata must name the
+package.
+
+Most packages only ever want `usr/`, and `etc/` for a default somebody may
+edit. The other three are for the base system: `bin/` and `sbin/` for a package
+whose commands the device boots into, and `lib/` for the dynamic loader, whose
+path is compiled into every binary on the card. Anywhere else — `var/`, `opt/`,
+`home/`, `boot/` — is refused, because it belongs to this program's own
+database, to the image, or to whoever runs the device.
 
 A dependency's version means *that version or a newer one*, so name the oldest
 version your package actually works with.

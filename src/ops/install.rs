@@ -104,8 +104,8 @@ pub struct Replaced {
     /// What decides whether an upgrade may replace a configuration file: if
     /// what is on the card still hashes to this, nobody has touched it and the
     /// new default goes in; if it does not, the file is somebody's work and the
-    /// new default is written beside it instead. Files under `usr/` are in here
-    /// too and take no part in that decision - the package owns them.
+    /// new default is written beside it instead. Files outside `etc/` are in
+    /// here too and take no part in that decision - the package owns them.
     pub digests: BTreeMap<PathBuf, Sha256>,
 }
 
