@@ -519,11 +519,52 @@ beside the sources it describes:
   describes does. The author leaves it empty, and `create` fills it in on the
   copy it packs.
 
+### Where a package may write
+
+A package writes under `bin/`, `etc/`, `lib/`, `sbin/` or `usr/`, and nowhere
+else on the device.
+
+This was `usr/` and `etc/` alone to begin with, on the reasoning that a package
+writing anywhere else was altering the system rather than adding to it. That
+reasoning holds only while everything below the applications is baked into the
+image, and it made two packages the operating system actually needs impossible
+to express: **busybox**, whose applets declare where they belong and which ships
+`/bin/sh` and `/sbin/init`, and **musl**, whose loader lives at
+`/lib/ld-musl-aarch64.so.1` because that path is compiled into every dynamically
+linked binary on the card.
+
+The roots are an allowlist rather than a denylist, because a denylist silently
+permits every directory somebody invents later, and this is the one part of the
+program that writes into `/` as root. Each is named for a reason:
+
+| | |
+|---|---|
+| `bin`, `sbin` | the commands the system boots into, busybox's among them |
+| `lib` | the dynamic loader, whose path is compiled into every binary |
+| `usr` | everything above the base system — the package's own, outright |
+| `etc` | defaults an administrator may then edit, below |
+
+What is left out is left out deliberately. **`var`** holds `/var/lib/spm`, this
+program's own database: a package able to write there could forge an install
+record, or corrupt the one that says what it is allowed to remove. **`boot`**
+belongs to `Sepia-OS/boot` and is read by the firmware before anything here
+exists. **`dev`, `proc`, `sys`, `run`, `tmp`** are kernel or volatile
+filesystems, where nothing installed belongs and nothing written survives to be
+removed again. **`home`, `root`, `mnt`, `media`, `opt`, `srv`** are people's
+files and mount points.
+
+**This is not what stops two packages fighting over one file**, and it never
+was. `install` refuses to write over a file another record claims, or a file no
+record claims at all — so a musl package cannot land on a card whose image
+already carries a libc, and two of them cannot both install. `remove` refuses to
+take away a package something else depends on. Those are the checks; this list
+only says which directories are addressable.
+
 ### Configuration
 
-Everything a package ships under `usr/` is the package's own: `spm` replaces it
-on upgrade and deletes it on remove without asking. `etc/` is the exception,
-because a default exists to be changed.
+Everything a package ships is the package's own: `spm` replaces it on upgrade
+and deletes it on remove without asking. `etc/` is the exception, because a
+default exists to be changed.
 
 At install time the digest of each `etc/` file is recorded. Every later decision
 about that file asks whether what is on the card still matches it:
@@ -543,15 +584,17 @@ made the edit.
 
 `create` refuses to write a package that could not be installed safely:
 
-- **Everything in the tree has to be under `usr/` or `etc/`.** A package that
-  writes outside them is altering the system rather than adding to it. `etc/` is
-  the narrow exception, and narrow on purpose: it is where a package ships a
-  default an administrator may then edit, which is the one kind of file `spm`
-  does not own outright.
+- **Everything in the tree has to be under one of the roots above.** A package
+  that writes outside them is altering the system rather than adding to it.
 - **A licence has to be present** under `usr/share/licenses/<name>/`. A package
   carries somebody else's work, and shipping it without its licence is not
   something this tool should make easy.
-- **No libc and no dynamic loader.** Both belong to the image rather than to a
-  package; a second copy of either is a device that stops booting.
 - **`metadata.json` has to name a package.** `name`, `version` and `target`
   are required; a package that cannot say what it is cannot be indexed.
+
+There used to be a fourth, refusing any tree holding a `libc.so*` or an
+`ld-musl-*` on the grounds that both belonged to the image and a second copy of
+either was a device that stopped booting. The danger is real and the rule was in
+the wrong place: it made the libc unpackageable rather than making a *second*
+libc unpackageable. What prevents the second one is `install` never writing over
+a file it does not own, which holds however the file is named.

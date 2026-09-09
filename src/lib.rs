@@ -28,6 +28,7 @@
 pub mod cli;
 pub mod conffile;
 pub mod error;
+pub mod layout;
 pub mod model;
 pub mod net;
 pub mod ops;

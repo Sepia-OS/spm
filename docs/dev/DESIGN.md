@@ -52,6 +52,7 @@ src/
   cli.rs            the clap definitions - one struct per command
   error.rs          Error, and the exit code each variant maps to
   conffile.rs       etc/: which files are the administrator's, and when
+  layout.rs         the roots a package may write in, and why each one
   sign.rs           Ed25519 keys, and the two things that are signed
   model/
     version.rs      Version and its ordering
@@ -194,17 +195,17 @@ is, and that is the next section.
 
 ### Configuration files
 
-A file under `usr/` belongs to the package that put it there: `spm` replaces it
-on upgrade and deletes it on remove without asking anybody. `etc/` is the one
-place where that is wrong, because the whole point of a default is that somebody
-may change it.
+A file a package ships belongs to the package that put it there, whichever root
+it landed in: `spm` replaces it on upgrade and deletes it on remove without
+asking anybody. `etc/` is the one place where that is wrong, because the whole
+point of a default is that somebody may change it.
 
 So every decision about an `etc/` file asks one question first — *is this still
 the bytes we wrote?* — by hashing what is on the card and comparing it against
 `digests`. Two answers, and the whole policy follows from them:
 
 - **Untouched.** Nobody wanted it, so it is a stale default: replaced on
-  upgrade, deleted on remove, exactly like anything under `usr/`.
+  upgrade, deleted on remove, exactly like anything the package owns outright.
 - **Edited.** Somebody decided something, so it is theirs: never overwritten and
   never deleted. On upgrade the new default is written beside it with `.spmnew`
   appended to the whole name — `helix.conf` becomes `helix.conf.spmnew`, so the
@@ -212,10 +213,10 @@ the bytes we wrote?* — by hashing what is on the card and comparing it against
   collide — and both the upgrade and the removal name the files they left, since
   a file nobody is told about is a decision nobody will make.
 
-**Only `etc/` gets this protection.** A record now carries a digest for files
-under `usr/` too, and a mismatch there means the opposite thing — the package
-owns that file, so contents that changed underneath it are damage rather than a
-decision. `conffile::may_delete` therefore asks where the file is before it asks
+**Only `etc/` gets this protection.** A record now carries a digest for every
+file a package ships, and a mismatch outside `etc/` means the opposite thing —
+the package owns that file, so contents that changed underneath it are damage
+rather than a decision. `conffile::may_delete` therefore asks where the file is before it asks
 whether it matches; a digest existing is no longer what makes a file somebody
 else's.
 
@@ -407,11 +408,14 @@ checked before it is created:
 - **The path must be relative and must stay inside the root.** No leading `/`,
   no component equal to `..` — after normalisation, an entry that escapes is a
   refusal, not a clamp.
-- **The path must start with `usr/` or `etc/`.** `create` enforces this when
-  packing; `install` enforces it again when unpacking, because a package can
-  reach a device without having passed through this `create`. `usr/` is the
-  package's own; `etc/` is where it ships defaults somebody may then edit, and
-  what happens to one of those afterwards is in *Configuration files* above.
+- **The path must start with one of the roots `layout` names** — `bin/`, `etc/`,
+  `lib/`, `sbin/` or `usr/`. `create` enforces this when packing; `install`
+  enforces it again when unpacking, because a package can reach a device without
+  having passed through this `create`. One definition and two enforcement points,
+  so they cannot drift. `etc/` is where a package ships defaults somebody may
+  then edit, and what happens to one of those afterwards is in *Configuration
+  files* above; everything under the rest is the package's own. `ARCHITECTURE.md`
+  carries the reasoning for each root, and for each of the ones left out.
 - **Only regular files, directories and symlinks.** No devices, no FIFOs, no
   sockets, no hard links — a hard link to `/etc/shadow` is a way to hand out
   its contents.

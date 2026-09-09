@@ -393,6 +393,10 @@ are the new dependencies, all three named in the design's table.
 **Notes.** Everything under `usr/`; a licence under
 `usr/share/licenses/<name>/`; no libc and no dynamic loader; `metadata.json`
 names the package.
+**Since.** Two of these have changed — the roots are now `bin/`, `etc/`, `lib/`,
+`sbin/` and `usr/`, and the libc rule is gone, because it made the libc
+unpackageable rather than a second libc unpackageable. See *Where a package may
+write* in ARCHITECTURE.md; this entry records what the step did at the time.
 **Done when.** A test tree for each refusal fails with its own message, and the
 good tree passes.
 **Done.** `check_tree`, with 8 tests — one per refusal, plus the good tree, plus

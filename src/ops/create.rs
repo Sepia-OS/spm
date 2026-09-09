@@ -40,8 +40,8 @@ use flate2::Compression;
 use flate2::write::GzEncoder;
 use sha2::{Digest, Sha256 as Hasher};
 
-use crate::conffile;
 use crate::error::{Error, Result};
+use crate::layout;
 use crate::model::index::Index;
 use crate::model::metadata::{Metadata, Sha256};
 use crate::sign::{PrivateKey, PublicKey};
@@ -68,21 +68,24 @@ pub const SUMS: &str = "SHA256SUMS";
 /// Where a package's licence has to be, under its own name.
 const LICENSES: &str = "usr/share/licenses";
 
-/// File names that belong to the system image and never to a package.
-///
-/// The same rule the `rootfs` build applies to every sibling package it
-/// consumes. A second libc or a second loader on a card is a card that stops
-/// booting, and it is the kind of mistake a build makes by staging too much
-/// rather than by anybody deciding to.
-const NEVER: [&str; 3] = ["libc.so", "ld-musl-", "ld-linux"];
-
 /// Refuse a staged tree that could not be installed safely.
 ///
-/// The four rules are `docs/dev/ARCHITECTURE.md`'s, and three of them are
-/// checked here. The fourth — that the metadata names a package — is not
+/// The three rules are `docs/dev/ARCHITECTURE.md`'s, and two of them are
+/// checked here. The third — that the metadata names a package — is not
 /// checked at all, because it cannot be broken: a [`Metadata`] without a name,
 /// a version or a target does not parse, so one cannot be handed to this
 /// function.
+///
+/// **There used to be a fourth**, refusing any tree containing a `libc.so*` or
+/// an `ld-musl-*`, on the reasoning that both belonged to the image and a
+/// second copy of either was a device that stopped booting. The reasoning was
+/// right and the rule was in the wrong place: it made the libc unpackageable
+/// rather than making a *second* libc unpackageable, and what actually prevents
+/// the second one is `ops::install`, which refuses to write over a file another
+/// record claims ([`Error::FileConflict`]) or a file no record claims at all
+/// ([`Error::FileUnowned`]) — so a musl package cannot land on a card whose
+/// image already carries one, and two of them cannot both install. See
+/// [`crate::layout`].
 ///
 /// # Errors
 ///
@@ -92,31 +95,14 @@ pub fn check_tree(root: &Path, metadata: &Metadata) -> Result<()> {
     let entries = collect(root)?;
 
     for entry in &entries {
-        // Everything under usr/ or etc/. A package that writes outside them is
-        // altering the system rather than adding to it. `etc/` is the narrow
-        // exception, and it is narrow on purpose: it is where a package ships a
-        // default somebody may then edit, which is the one kind of file this
-        // program does not own outright - see `crate::conffile`.
-        let top = entry.relative.components().next();
-        let allowed = matches!(
-            top,
-            Some(Component::Normal(name)) if name == "usr" || name == conffile::ETC
-        );
-        if !allowed {
-            return Err(Error::NotPackageable {
-                path: entry.relative.clone(),
-                reason: "everything in a package has to be under usr/ or etc/ - a package that writes outside them is altering the system rather than adding to it".to_owned(),
-            });
-        }
-
-        // No libc, no loader.
-        if let Some(name) = entry.relative.file_name().and_then(|name| name.to_str())
-            && let Some(never) = NEVER.iter().find(|never| name.starts_with(*never))
-        {
+        // Everything under one of the roots `layout` names. That module carries
+        // the reasoning for each of them, and for each of the ones left out.
+        if !layout::is_writable_root(&entry.relative) {
             return Err(Error::NotPackageable {
                 path: entry.relative.clone(),
                 reason: format!(
-                    "a file called {never}* is a libc or a dynamic loader, and both belong to the image rather than to a package - a second copy of either is a device that stops booting"
+                    "everything in a package has to be under {} - the rest of the device is the system image's, the kernel's or somebody's own, and a package that writes there is altering the system rather than adding to it",
+                    layout::listed()
                 ),
             });
         }
@@ -697,7 +683,9 @@ mod tests {
     }
 
     #[test]
-    fn a_file_outside_usr_and_etc_is_refused() {
+    fn a_file_outside_the_writable_roots_is_refused() {
+        // var/ is the one that matters most: /var/lib/spm is this program's own
+        // database, and a package able to write there could forge a record.
         let directory = tempfile::tempdir().unwrap();
         let tree = directory.path().join("stage");
         staged(&tree);
@@ -706,13 +694,13 @@ mod tests {
 
         let (path, reason) = refusal(&tree, "helix");
         assert_eq!(path, PathBuf::from("var"));
-        assert!(reason.contains("under usr/ or etc/"), "{reason}");
+        assert!(reason.contains(&layout::listed()), "{reason}");
     }
 
     #[test]
     fn configuration_under_etc_is_allowed() {
-        // The one place outside usr/ a package may write, because it is where a
-        // default somebody may then edit belongs.
+        // Where a default somebody may then edit belongs - the one root whose
+        // files this program does not own outright.
         let directory = tempfile::tempdir().unwrap();
         let tree = directory.path().join("stage");
         staged(&tree);
@@ -723,6 +711,54 @@ mod tests {
         let output = directory.path().join("dist");
         create(&tree, &metadata, &output, None)
             .expect("a package may ship configuration under etc/");
+    }
+
+    #[test]
+    fn a_busybox_shaped_tree_packages() {
+        // The tree that could not be expressed before: applets in /bin and
+        // /sbin, symlinked into the one binary. busybox's applets declare where
+        // they belong, and a card whose /bin/sh does not exist cannot run a
+        // script - so packaging it as a usr/-only tree was never an option.
+        let directory = tempfile::tempdir().unwrap();
+        let tree = directory.path().join("stage");
+        fs::create_dir_all(tree.join("bin")).unwrap();
+        fs::create_dir_all(tree.join("sbin")).unwrap();
+        fs::create_dir_all(tree.join("usr/bin")).unwrap();
+        fs::create_dir_all(tree.join("usr/share/licenses/busybox")).unwrap();
+        fs::write(tree.join("bin/busybox"), b"\x7fELF").unwrap();
+        fs::write(
+            tree.join("usr/share/licenses/busybox/LICENSE"),
+            b"GPL-2.0-only",
+        )
+        .unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::symlink;
+            symlink("busybox", tree.join("bin/sh")).unwrap();
+            symlink("../bin/busybox", tree.join("sbin/init")).unwrap();
+            symlink("../../bin/busybox", tree.join("usr/bin/awk")).unwrap();
+        }
+
+        check_tree(&tree, &metadata_for("busybox")).expect("busybox ships /bin/sh and /sbin/init");
+    }
+
+    #[test]
+    fn a_libc_and_a_loader_now_package() {
+        // The rule that used to refuse this was right about the danger and
+        // wrong about where to stop it: it made the libc unpackageable rather
+        // than a *second* libc unpackageable. `ops::install` is what refuses
+        // the second one, by never writing over a file it does not own.
+        let directory = tempfile::tempdir().unwrap();
+        let tree = directory.path().join("stage");
+        fs::create_dir_all(tree.join("lib")).unwrap();
+        fs::create_dir_all(tree.join("usr/lib")).unwrap();
+        fs::create_dir_all(tree.join("usr/share/licenses/musl")).unwrap();
+        fs::write(tree.join("lib/ld-musl-aarch64.so.1"), b"\x7fELF").unwrap();
+        fs::write(tree.join("usr/lib/libc.so"), b"\x7fELF").unwrap();
+        fs::write(tree.join("usr/share/licenses/musl/COPYRIGHT"), b"MIT").unwrap();
+
+        check_tree(&tree, &metadata_for("musl"))
+            .expect("the loader's path is compiled into every binary on the card");
     }
 
     #[test]
@@ -772,8 +808,14 @@ mod tests {
     }
 
     #[test]
-    fn a_libc_or_a_loader_in_the_tree_is_refused() {
-        for intruder in [
+    fn a_libc_or_a_loader_is_no_longer_refused_by_its_name() {
+        // These three were refused outright until the libc became something a
+        // package could be. Keeping the cases rather than deleting them: the
+        // danger they named is real, and this records where it is now handled -
+        // `ops::install::unclaimed`, which refuses to write over a file no
+        // record claims, so a card whose image carries a libc cannot acquire a
+        // second one however the package is named.
+        for previously_refused in [
             "usr/lib/libc.so",
             "usr/lib/libc.so.6",
             "usr/lib/ld-musl-aarch64.so.1",
@@ -781,11 +823,10 @@ mod tests {
             let directory = tempfile::tempdir().unwrap();
             let tree = directory.path().join("stage");
             staged(&tree);
-            fs::write(tree.join(intruder), b"not yours to ship").unwrap();
+            fs::write(tree.join(previously_refused), b"a libc").unwrap();
 
-            let (path, reason) = refusal(&tree, "helix");
-            assert_eq!(path, PathBuf::from(intruder), "{intruder}");
-            assert!(reason.contains("stops booting"), "{reason}");
+            check_tree(&tree, &metadata_for("helix"))
+                .unwrap_or_else(|error| panic!("{previously_refused}: {error}"));
         }
     }
 

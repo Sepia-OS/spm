@@ -8,6 +8,39 @@ once it has something to version.
 
 ## [Unreleased]
 
+### Changed
+
+- **A package may now write under `bin/`, `sbin/` and `lib/`, as well as `usr/`
+  and `etc/`.** The old pair made two packages the operating system actually
+  needs impossible to express: busybox, whose applets declare where they belong
+  and which ships `/bin/sh` and `/sbin/init` — a card whose `/bin/sh` does not
+  exist cannot run a script — and musl, whose loader lives at
+  `/lib/ld-musl-aarch64.so.1` because that path is compiled into every
+  dynamically linked binary on the card. The original reasoning, that a package
+  writing outside `usr/` was altering the system rather than adding to it, held
+  only while everything below the applications was baked into the image.
+- The roots are an **allowlist**, not a denylist, because a denylist silently
+  permits every directory somebody invents later and this is the code that
+  writes into `/` as root. `var/` is the pointed omission: `/var/lib/spm` is
+  this program's own database, and a package able to write there could forge an
+  install record. `boot/`, `dev/`, `proc/`, `sys/`, `run/`, `tmp/`, `home/`,
+  `root/`, `mnt/`, `media/`, `opt/` and `srv/` are out too, each for a reason
+  written down in `ARCHITECTURE.md`.
+- **`create` no longer refuses a tree because of a `libc.so*` or an
+  `ld-musl-*`.** The danger that rule named is real — a second libc or loader on
+  a card is a card that stops booting — but the rule was in the wrong place: it
+  made the libc unpackageable rather than making a *second* libc unpackageable,
+  which is not the same thing once musl is a package. What actually prevents the
+  second one is `install`, which refuses to write over a file another record
+  claims or a file no record claims at all, so a musl package cannot land on a
+  card whose image already carries one and two of them cannot both install.
+  `remove` still refuses to take away a package something else depends on. Those
+  checks hold however a file is named; the old one only held for three spellings.
+- New `src/layout.rs` holds the roots and the reasoning for each. `create` and
+  `unpack` both consult it, so the rule enforced when packing and the rule
+  enforced when unpacking cannot drift — they could before, being two literals
+  in two modules.
+
 ### Added
 
 - **Indexes and packages are signed, and a device refuses anything that is

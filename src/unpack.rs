@@ -26,12 +26,12 @@
 //! - **Relative, and inside the root.** No leading `/`, no `..`. An entry that
 //!   escapes is refused rather than clamped: a package that meant to write
 //!   outside the tree has not asked for something this can helpfully correct.
-//! - **Under `usr/` or `etc/`.** `ops::create` enforces this when packing, and
-//!   this enforces it again, because a package can reach a device without
-//!   having passed through this `create`. `etc/` is where a package ships
-//!   configuration; what happens to such a file once somebody edits it is
-//!   `crate::conffile`'s business rather than this module's, which writes what
-//!   it is told to write.
+//! - **Under one of the roots [`crate::layout`] names.** `ops::create` enforces
+//!   this when packing, and this enforces it again, because a package can reach
+//!   a device without having passed through this `create`. `etc/` is where a
+//!   package ships configuration; what happens to such a file once somebody
+//!   edits it is `crate::conffile`'s business rather than this module's, which
+//!   writes what it is told to write.
 //! - **Regular files, directories and symlinks, and nothing else.** No devices,
 //!   no FIFOs, no sockets, and in particular no hard links - a hard link to
 //!   `/etc/shadow` is a way to hand out its contents.
@@ -62,6 +62,7 @@ use sha2::{Digest, Sha256 as Hasher};
 
 use crate::conffile;
 use crate::error::{Error, Result};
+use crate::layout;
 use crate::model::metadata::Sha256;
 
 /// What one entry in a payload is.
@@ -321,34 +322,30 @@ fn safe_path(path: &Path) -> Result<PathBuf> {
         }
     }
 
-    if !starts_at_a_writable_top(path) {
+    if !layout::is_writable_root(path) {
         return Err(Error::UnsafeEntry {
             path: path.to_path_buf(),
-            reason: "a package writes under usr/ or etc/ and nowhere else - anything outside them belongs to the system image, and a package that writes there is altering the system rather than adding to it".to_owned(),
+            reason: format!(
+                "a package writes under {} and nowhere else - the rest of the device is the system image's, the kernel's or somebody's own, and a package that writes there is altering the system rather than adding to it",
+                layout::listed()
+            ),
         });
     }
 
     Ok(path.to_path_buf())
 }
 
-/// Whether a checked path begins with a directory a package may write in.
-///
-/// Two of them: `usr/`, which the package owns outright, and `etc/`, where it
-/// ships defaults an administrator may then edit. Nothing else.
-fn starts_at_a_writable_top(path: &Path) -> bool {
-    matches!(
-        path.components().next(),
-        Some(Component::Normal(first)) if first == "usr" || first == conffile::ETC
-    )
-}
-
 /// Check where a symlink points.
 ///
 /// A link is a path the package writes, so its target is checked the same way
 /// one is: it has to be relative, and once resolved against the directory the
-/// link sits in it has to land under `usr/` or `etc/` like everything else.
-/// That is what stops a package shipping `usr/lib/x -> /var` and then writing
-/// `usr/lib/x/spool` in the next entry.
+/// link sits in it has to land under one of [`crate::layout`]'s roots like
+/// everything else. That is what stops a package shipping `usr/lib/x -> /var`
+/// and then writing `usr/lib/x/spool` in the next entry.
+///
+/// Note that this resolves and checks the *link's own* landing place, not the
+/// file at the far end. `bin/sh -> busybox` lands in `bin/`, which is what
+/// makes busybox's several hundred applet symlinks expressible at all.
 fn safe_target(link: &Path, target: &Path) -> Result<()> {
     let refuse = |reason: &str| Error::UnsafeEntry {
         path: link.to_path_buf(),
@@ -382,15 +379,16 @@ fn safe_target(link: &Path, target: &Path) -> Result<()> {
     }
 
     let landed: PathBuf = resolved.iter().collect();
-    if !starts_at_a_writable_top(&landed) {
+    if !layout::is_writable_root(&landed) {
         return Err(refuse(&format!(
-            "that is {}, which is outside usr/ and etc/",
+            "that is {}, which is outside {}",
             if landed.as_os_str().is_empty() {
                 PathBuf::from("the root of the device")
             } else {
                 landed
             }
-            .display()
+            .display(),
+            layout::listed()
         )));
     }
 
@@ -940,13 +938,56 @@ mod tests {
     }
 
     #[test]
-    fn an_entry_outside_usr_and_etc_is_refused() {
+    fn an_entry_outside_the_writable_roots_is_refused() {
         // `ops::create` refuses this when packing; a package can reach a device
-        // without having passed through that `create`.
+        // without having passed through that `create`. var/ is the one that
+        // matters most - /var/lib/spm is this program's own database.
         let (_directory, outcome) = extracting(vec![file("var/lib/x/state", b"s")]);
         let (path, reason) = refusal(outcome);
         assert_eq!(path, PathBuf::from("var/lib/x/state"));
-        assert!(reason.contains("usr/ or etc/"), "{reason}");
+        assert!(reason.contains(&layout::listed()), "{reason}");
+    }
+
+    #[test]
+    fn the_roots_a_base_system_needs_are_written() {
+        // busybox's /bin/sh and musl's loader, which is the shape of package
+        // this module refused to extract until `layout` named the roots. The
+        // symlink is the part worth having a case for: `bin/sh -> busybox`
+        // resolves inside `bin/`, so the target check has to allow it too.
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path().join("root");
+        let archive = payload(
+            temp.path(),
+            vec![
+                directory("bin"),
+                file("bin/busybox", b"\x7fELF"),
+                link("bin/sh", "busybox"),
+                directory("sbin"),
+                link("sbin/init", "../bin/busybox"),
+                directory("lib"),
+                file("lib/ld-musl-aarch64.so.1", b"\x7fELF"),
+            ],
+        );
+
+        let written = extract(
+            File::open(&archive).unwrap(),
+            &archive,
+            &root,
+            &BTreeSet::new(),
+        )
+        .expect("a base system ships /bin, /sbin and the loader in /lib");
+
+        // Archive order, which extraction preserves - not sorted. Deterministic
+        // either way, because the archive is built above.
+        assert_eq!(
+            paths(&written),
+            vec![
+                PathBuf::from("bin/busybox"),
+                PathBuf::from("bin/sh"),
+                PathBuf::from("sbin/init"),
+                PathBuf::from("lib/ld-musl-aarch64.so.1"),
+            ]
+        );
     }
 
     #[test]
